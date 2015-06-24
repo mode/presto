@@ -124,9 +124,7 @@ public class PrestoConnection
             throws SQLException
     {
         checkOpen();
-        if (!autoCommit) {
-            throw new SQLFeatureNotSupportedException("Disabling auto-commit mode not supported");
-        }
+        // TODO: implement this
     }
 
     @Override

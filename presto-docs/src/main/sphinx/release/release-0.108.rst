@@ -30,6 +30,7 @@ General Changes
 * Improve query detail UI page.
 * Fix printing of table layouts in :doc:`/sql/explain`.
 * Add :doc:`/connector/blackhole`.
+* Allow calling ``Connection.setAutoCommit`` in the JDBC driver.
 
 Cassandra Changes
 -----------------
