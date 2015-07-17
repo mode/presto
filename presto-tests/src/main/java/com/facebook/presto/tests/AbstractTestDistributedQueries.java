@@ -105,6 +105,25 @@ public abstract class AbstractTestDistributedQueries
     }
 
     @Test
+    public void testCreateTableIfNotExists()
+            throws Exception
+    {
+        assertQueryTrue("CREATE TABLE test_create_table_if_not_exists (a bigint, b varchar, c double)");
+        assertTrue(queryRunner.tableExists(getSession(), "test_create_table_if_not_exists"));
+        MaterializedResult expected = computeActual(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'test_create_table_if_not_exists'");
+
+        assertQueryTrue("CREATE TABLE IF NOT EXISTS test_create_table_if_not_exists (d bigint, e varchar)");
+        assertTrue(queryRunner.tableExists(getSession(), "test_create_table_if_not_exists"));
+        MaterializedResult actual = computeActual(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'test_create_table_if_not_exists'");
+        assertEquals(expected, actual);
+
+        assertQueryTrue("DROP TABLE test_create_table_if_not_exists");
+        assertFalse(queryRunner.tableExists(getSession(), "test_create_table_if_not_exists"));
+    }
+
+    @Test
     public void testCreateTableAsSelect()
             throws Exception
     {
@@ -218,19 +237,6 @@ public abstract class AbstractTestDistributedQueries
 
         assertQueryTrue("DROP TABLE test_delete");
 
-        // delete using a subquery
-
-        assertQuery("CREATE TABLE test_delete AS SELECT * FROM lineitem", "SELECT count(*) FROM lineitem");
-
-        assertQuery(
-                "DELETE FROM test_delete WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')",
-                "SELECT count(*) FROM lineitem WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')");
-        assertQuery(
-                "SELECT * FROM test_delete",
-                "SELECT * FROM lineitem WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus <> 'F')");
-
-        assertQueryTrue("DROP TABLE test_delete");
-
         // delete using a constant property
 
         assertQuery("CREATE TABLE test_delete AS SELECT * FROM orders", "SELECT count(*) FROM orders");
@@ -245,6 +251,59 @@ public abstract class AbstractTestDistributedQueries
         assertQuery("CREATE TABLE test_delete AS SELECT * FROM orders", "SELECT count(*) FROM orders");
         assertQuery("DELETE FROM test_delete WHERE rand() < 0", "SELECT 0");
         assertQueryTrue("DROP TABLE test_delete");
+    }
+
+    @Test
+    public void testDeleteSemiJoin()
+            throws Exception
+    {
+        // delete using a subquery
+
+        assertQuery("CREATE TABLE test_delete_semi_join AS SELECT * FROM lineitem", "SELECT count(*) FROM lineitem");
+
+        assertQuery(
+                "DELETE FROM test_delete_semi_join WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')",
+                "SELECT count(*) FROM lineitem WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')");
+        assertQuery(
+                "SELECT * FROM test_delete_semi_join",
+                "SELECT * FROM lineitem WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus <> 'F')");
+
+        assertQueryTrue("DROP TABLE test_delete_semi_join");
+
+        // delete with multiple SemiJoin
+
+        assertQuery("CREATE TABLE test_delete_semi_join AS SELECT * FROM lineitem", "SELECT count(*) FROM lineitem");
+
+        assertQuery(
+                "DELETE FROM test_delete_semi_join\n" +
+                "WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')\n" +
+                "  AND orderkey IN (SELECT orderkey FROM orders WHERE custkey % 5 = 0)\n",
+                "SELECT count(*) FROM lineitem\n" +
+                "WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus = 'F')\n" +
+                "  AND orderkey IN (SELECT orderkey FROM orders WHERE custkey % 5 = 0)");
+        assertQuery(
+                "SELECT * FROM test_delete_semi_join",
+                "SELECT * FROM lineitem\n" +
+                "WHERE orderkey IN (SELECT orderkey FROM orders WHERE orderstatus <> 'F')\n" +
+                "  OR orderkey IN (SELECT orderkey FROM orders WHERE custkey % 5 <> 0)");
+
+        assertQueryTrue("DROP TABLE test_delete_semi_join");
+
+        // delete with SemiJoin null handling
+
+        assertQuery("CREATE TABLE test_delete_semi_join AS SELECT * FROM orders", "SELECT count(*) FROM orders");
+
+        assertQuery(
+                "DELETE FROM test_delete_semi_join\n" +
+                        "WHERE (orderkey IN (SELECT CASE WHEN orderkey % 3 = 0 THEN NULL ELSE orderkey END FROM lineitem)) IS NULL\n",
+                "SELECT count(*) FROM orders\n" +
+                        "WHERE (orderkey IN (SELECT CASE WHEN orderkey % 3 = 0 THEN NULL ELSE orderkey END FROM lineitem)) IS NULL\n");
+        assertQuery(
+                "SELECT * FROM test_delete_semi_join",
+                "SELECT * FROM orders\n" +
+                        "WHERE (orderkey IN (SELECT CASE WHEN orderkey % 3 = 0 THEN NULL ELSE orderkey END FROM lineitem)) IS NOT NULL\n");
+
+        assertQueryTrue("DROP TABLE test_delete_semi_join");
     }
 
     @Test

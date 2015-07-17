@@ -83,6 +83,7 @@ import java.util.stream.Stream;
 
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.planner.DomainUtils.simplifyDomain;
+import static com.facebook.presto.sql.planner.PlanFragment.NullPartitioning.REPLICATE;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.String.format;
 
@@ -142,9 +143,16 @@ public class PlanPrinter
                             Joiner.on(", ").join(fragment.getOutputLayout())));
 
             if (fragment.getOutputPartitioning() == OutputPartitioning.HASH) {
-                builder.append(indentString(1))
-                        .append(String.format("Output partitioning: [%s]\n",
-                                Joiner.on(", ").join(fragment.getPartitionBy())));
+                List<Symbol> symbols = fragment.getPartitionBy().orElseGet(() -> ImmutableList.of(new Symbol("(absent)")));
+                builder.append(indentString(1));
+                if (Optional.of(REPLICATE).equals(fragment.getNullPartitionPolicy())) {
+                    builder.append(String.format("Output partitioning: (replicate nulls) [%s]\n",
+                            Joiner.on(", ").join(symbols)));
+                }
+                else {
+                    builder.append(String.format("Output partitioning: [%s]\n",
+                                   Joiner.on(", ").join(symbols)));
+                }
             }
 
             builder.append(textLogicalPlan(fragment.getRoot(), fragment.getSymbols(), metadata, 1))
@@ -156,7 +164,7 @@ public class PlanPrinter
 
     public static String graphvizLogicalPlan(PlanNode plan, Map<Symbol, Type> types)
     {
-        PlanFragment fragment = new PlanFragment(new PlanFragmentId("graphviz_plan"), plan, types, plan.getOutputSymbols(), PlanDistribution.SINGLE, plan.getId(), OutputPartitioning.NONE, ImmutableList.<Symbol>of(), Optional.empty());
+        PlanFragment fragment = new PlanFragment(new PlanFragmentId("graphviz_plan"), plan, types, plan.getOutputSymbols(), PlanDistribution.SINGLE, plan.getId(), OutputPartitioning.NONE, Optional.empty(), Optional.empty(), Optional.empty());
         return GraphvizPrinter.printLogical(ImmutableList.of(fragment));
     }
 

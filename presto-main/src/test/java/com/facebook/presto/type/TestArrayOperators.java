@@ -138,6 +138,7 @@ public class TestArrayOperators
         assertFunction("CAST(CAST('[true, false]' AS JSON) AS ARRAY<BOOLEAN>)", new ArrayType(BOOLEAN), ImmutableList.of(true, false));
         assertFunction("CAST(CAST('[[1], [null]]' AS JSON) AS ARRAY<ARRAY<BIGINT>>)", new ArrayType(new ArrayType(BIGINT)), asList(asList(1L), asList((Long) null)));
         assertFunction("CAST(CAST('null' AS JSON) AS ARRAY<BIGINT>)", new ArrayType(BIGINT), null);
+        assertFunction("CAST(CAST('[5, [1, 2, 3], \"e\", {\"a\": \"b\"}, null, \"null\", [null]]' AS JSON) AS ARRAY<JSON>)", new ArrayType(JSON), ImmutableList.of("5", "[1,2,3]", "\"e\"", "{\"a\":\"b\"}", "null", "\"null\"", "[null]"));
         assertInvalidCast("CAST(CAST('[1, null, 3]' AS JSON) AS ARRAY<TIMESTAMP>)");
         assertInvalidCast("CAST(CAST('[1, null, 3]' AS JSON) AS ARRAY<ARRAY<TIMESTAMP>>)");
         assertInvalidCast("CAST(CAST('[1, 2, 3]' AS JSON) AS ARRAY<BOOLEAN>)");
@@ -278,6 +279,46 @@ public class TestArrayOperators
     }
 
     @Test
+    public void testArrayMin()
+            throws Exception
+    {
+        assertFunction("ARRAY_MIN(ARRAY [])", UNKNOWN, null);
+        assertFunction("ARRAY_MIN(ARRAY [NULL])", UNKNOWN, null);
+        assertFunction("ARRAY_MIN(ARRAY [NULL, NULL, NULL])", UNKNOWN, null);
+        assertFunction("ARRAY_MIN(ARRAY [NULL, 2, 3])", BIGINT, null);
+        assertFunction("ARRAY_MIN(ARRAY [1.0, NULL, 3])", DOUBLE, null);
+        assertFunction("ARRAY_MIN(ARRAY ['1', '2', NULL])", VARCHAR, null);
+        assertFunction("ARRAY_MIN(ARRAY [3, 2, 1])", BIGINT, 1);
+        assertFunction("ARRAY_MIN(ARRAY [1, 2, 3])", BIGINT, 1);
+        assertFunction("ARRAY_MIN(ARRAY [1, 2.0, 3])", DOUBLE, 1.0);
+        assertFunction("ARRAY_MIN(ARRAY [ARRAY[1, 2], ARRAY[3]])", new ArrayType(BIGINT), ImmutableList.of(1L, 2L));
+        assertFunction("ARRAY_MIN(ARRAY [1.0, 2.5, 3.0])", DOUBLE, 1.0);
+        assertFunction("ARRAY_MIN(ARRAY ['puppies', 'kittens'])", VARCHAR, "kittens");
+        assertFunction("ARRAY_MIN(ARRAY [TRUE, FALSE])", BOOLEAN, false);
+        assertFunction("ARRAY_MIN(ARRAY [NULL, FALSE])", BOOLEAN, null);
+    }
+
+    @Test
+    public void testArrayMax()
+            throws Exception
+    {
+        assertFunction("ARRAY_MAX(ARRAY [])", UNKNOWN, null);
+        assertFunction("ARRAY_MAX(ARRAY [NULL])", UNKNOWN, null);
+        assertFunction("ARRAY_MAX(ARRAY [NULL, NULL, NULL])", UNKNOWN, null);
+        assertFunction("ARRAY_MAX(ARRAY [NULL, 2, 3])", BIGINT, null);
+        assertFunction("ARRAY_MAX(ARRAY [1.0, NULL, 3])", DOUBLE, null);
+        assertFunction("ARRAY_MAX(ARRAY ['1', '2', NULL])", VARCHAR, null);
+        assertFunction("ARRAY_MAX(ARRAY [3, 2, 1])", BIGINT, 3);
+        assertFunction("ARRAY_MAX(ARRAY [1, 2, 3])", BIGINT, 3);
+        assertFunction("ARRAY_MAX(ARRAY [1, 2.0, 3])", DOUBLE, 3.0);
+        assertFunction("ARRAY_MAX(ARRAY [ARRAY[1, 2], ARRAY[3]])", new ArrayType(BIGINT), ImmutableList.of(3L));
+        assertFunction("ARRAY_MAX(ARRAY [1.0, 2.5, 3.0])", DOUBLE, 3.0);
+        assertFunction("ARRAY_MAX(ARRAY ['puppies', 'kittens'])", VARCHAR, "puppies");
+        assertFunction("ARRAY_MAX(ARRAY [TRUE, FALSE])", BOOLEAN, true);
+        assertFunction("ARRAY_MAX(ARRAY [NULL, FALSE])", BOOLEAN, null);
+    }
+
+    @Test
     public void testArrayPosition()
             throws Exception
     {
@@ -299,11 +340,13 @@ public class TestArrayOperators
     public void testSubscript()
             throws Exception
     {
-        String outOfBounds = "Index out of bounds";
+        String outOfBounds = "Array subscript out of bounds";
+        String negativeIndex = "Array subscript is negative";
+        String indexIsZero = "SQL array indices start at 1";
         assertInvalidFunction("ARRAY [][1]", outOfBounds);
-        assertInvalidFunction("ARRAY [null][-1]", outOfBounds);
-        assertInvalidFunction("ARRAY [1, 2, 3][0]", outOfBounds);
-        assertInvalidFunction("ARRAY [1, 2, 3][-1]", outOfBounds);
+        assertInvalidFunction("ARRAY [null][-1]", negativeIndex);
+        assertInvalidFunction("ARRAY [1, 2, 3][0]", indexIsZero);
+        assertInvalidFunction("ARRAY [1, 2, 3][-1]", negativeIndex);
         assertInvalidFunction("ARRAY [1, 2, 3][4]", outOfBounds);
 
         try {
@@ -371,6 +414,24 @@ public class TestArrayOperators
         assertFunction("ARRAY_DISTINCT(ARRAY [NULL])", new ArrayType(UNKNOWN), asList((Object) null));
         assertFunction("ARRAY_DISTINCT(ARRAY [NULL, NULL])", new ArrayType(UNKNOWN), asList((Object) null));
         assertFunction("ARRAY_DISTINCT(ARRAY [NULL, NULL, NULL])", new ArrayType(UNKNOWN), asList((Object) null));
+    }
+
+    @Test
+    public void testSlice()
+            throws Exception
+    {
+        assertFunction("SLICE(ARRAY [1, 2, 3, 4, 5], 1, 4)", new ArrayType(BIGINT), ImmutableList.of(1L, 2L, 3L, 4L));
+        assertFunction("SLICE(ARRAY [1, 2], 1, 4)", new ArrayType(BIGINT), ImmutableList.of(1L, 2L));
+        assertFunction("SLICE(ARRAY [1, 2, 3, 4, 5], 3, 2)", new ArrayType(BIGINT), ImmutableList.of(3L, 4L));
+        assertFunction("SLICE(ARRAY ['1', '2', '3', '4'], 2, 1)", new ArrayType(VARCHAR), ImmutableList.of("2"));
+        assertFunction("SLICE(ARRAY [1, 2, 3, 4], 3, 3)", new ArrayType(BIGINT), ImmutableList.of(3L, 4L));
+        assertFunction("SLICE(ARRAY [1, 2, 3, 4], -3, 3)", new ArrayType(BIGINT), ImmutableList.of(2L, 3L, 4L));
+        assertFunction("SLICE(ARRAY [1, 2, 3, 4], -3, 5)", new ArrayType(BIGINT), ImmutableList.of(2L, 3L, 4L));
+        assertFunction("SLICE(ARRAY [1, 2, 3, 4], 1, 0)", new ArrayType(BIGINT), ImmutableList.of());
+        assertFunction("SLICE(ARRAY [1, 2, 3, 4], -2, 0)", new ArrayType(BIGINT), ImmutableList.of());
+
+        assertInvalidFunction("SLICE(ARRAY [1, 2, 3, 4], 1, -1)", INVALID_FUNCTION_ARGUMENT);
+        assertInvalidFunction("SLICE(ARRAY [1, 2, 3, 4], 0, 1)", INVALID_FUNCTION_ARGUMENT);
     }
 
     @Test
