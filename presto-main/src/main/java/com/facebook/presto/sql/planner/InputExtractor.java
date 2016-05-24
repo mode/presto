@@ -13,12 +13,13 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.presto.Session;
 import com.facebook.presto.execution.Column;
 import com.facebook.presto.execution.Input;
-import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TableMetadata;
+import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.sql.planner.plan.IndexSourceNode;
@@ -38,10 +39,12 @@ import java.util.Set;
 public class InputExtractor
 {
     private final Metadata metadata;
+    private final Session session;
 
-    public InputExtractor(Metadata metadata)
+    public InputExtractor(Metadata metadata, Session session)
     {
         this.metadata = metadata;
+        this.session = session;
     }
 
     public List<Input> extract(PlanNode root)
@@ -60,7 +63,7 @@ public class InputExtractor
 
     private static Column createColumnEntry(ColumnMetadata columnMetadata)
     {
-        return new Column(columnMetadata.getName(), columnMetadata.getType().toString(), Optional.empty());
+        return new Column(columnMetadata.getName(), columnMetadata.getType().toString());
     }
 
     private static TableEntry createTableEntry(TableMetadata table)
@@ -83,16 +86,16 @@ public class InputExtractor
         public Void visitTableScan(TableScanNode node, Void context)
         {
             TableHandle tableHandle = node.getTable();
-            Optional<ColumnHandle> sampleWeightColumn = metadata.getSampleWeightColumnHandle(tableHandle);
+            Optional<ColumnHandle> sampleWeightColumn = metadata.getSampleWeightColumnHandle(session, tableHandle);
 
             Set<Column> columns = new HashSet<>();
             for (ColumnHandle columnHandle : node.getAssignments().values()) {
                 if (!columnHandle.equals(sampleWeightColumn.orElse(null))) {
-                    columns.add(createColumnEntry(metadata.getColumnMetadata(tableHandle, columnHandle)));
+                    columns.add(createColumnEntry(metadata.getColumnMetadata(session, tableHandle, columnHandle)));
                 }
             }
 
-            inputs.put(createTableEntry(metadata.getTableMetadata(tableHandle)), columns);
+            inputs.put(createTableEntry(metadata.getTableMetadata(session, tableHandle)), columns);
 
             return null;
         }
@@ -101,16 +104,16 @@ public class InputExtractor
         public Void visitIndexSource(IndexSourceNode node, Void context)
         {
             TableHandle tableHandle = node.getTableHandle();
-            Optional<ColumnHandle> sampleWeightColumn = metadata.getSampleWeightColumnHandle(tableHandle);
+            Optional<ColumnHandle> sampleWeightColumn = metadata.getSampleWeightColumnHandle(session, tableHandle);
 
             Set<Column> columns = new HashSet<>();
             for (ColumnHandle columnHandle : node.getAssignments().values()) {
                 if (!columnHandle.equals(sampleWeightColumn.orElse(null))) {
-                    columns.add(createColumnEntry(metadata.getColumnMetadata(tableHandle, columnHandle)));
+                    columns.add(createColumnEntry(metadata.getColumnMetadata(session, tableHandle, columnHandle)));
                 }
             }
 
-            inputs.put(createTableEntry(metadata.getTableMetadata(tableHandle)), columns);
+            inputs.put(createTableEntry(metadata.getTableMetadata(session, tableHandle)), columns);
 
             return null;
         }

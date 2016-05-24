@@ -16,13 +16,13 @@ package com.facebook.presto.cassandra;
 import com.facebook.presto.spi.RecordCursor;
 import com.facebook.presto.spi.RecordSet;
 import com.facebook.presto.spi.type.Type;
+import com.google.common.collect.ImmutableList;
 
 import java.util.List;
+import java.util.function.Function;
 
-import static com.facebook.presto.cassandra.CassandraColumnHandle.cassandraFullTypeGetter;
-import static com.facebook.presto.cassandra.CassandraColumnHandle.nativeTypeGetter;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.collect.Lists.transform;
+import static java.util.Objects.requireNonNull;
+import static java.util.stream.Collectors.toList;
 
 public class CassandraRecordSet
         implements RecordSet
@@ -35,12 +35,13 @@ public class CassandraRecordSet
 
     public CassandraRecordSet(CassandraSession cassandraSession, String schema, String cql, List<CassandraColumnHandle> cassandraColumns)
     {
-        this.cassandraSession = checkNotNull(cassandraSession, "cassandraSession is null");
-        this.schema = checkNotNull(schema, "schema is null");
-        this.cql = checkNotNull(cql, "cql is null");
-        checkNotNull(cassandraColumns, "cassandraColumns is null");
-        this.cassandraTypes = transform(cassandraColumns, cassandraFullTypeGetter());
-        this.columnTypes = transform(cassandraColumns, nativeTypeGetter());
+        this.cassandraSession = requireNonNull(cassandraSession, "cassandraSession is null");
+        this.schema = requireNonNull(schema, "schema is null");
+        this.cql = requireNonNull(cql, "cql is null");
+
+        requireNonNull(cassandraColumns, "cassandraColumns is null");
+        this.cassandraTypes = transformList(cassandraColumns, CassandraColumnHandle::getFullType);
+        this.columnTypes = transformList(cassandraColumns, CassandraColumnHandle::getType);
     }
 
     @Override
@@ -53,5 +54,10 @@ public class CassandraRecordSet
     public RecordCursor cursor()
     {
         return new CassandraRecordCursor(cassandraSession, schema, cassandraTypes, cql);
+    }
+
+    private static <T, R> List<R> transformList(List<T> list, Function<T, R> function)
+    {
+        return ImmutableList.copyOf(list.stream().map(function).collect(toList()));
     }
 }

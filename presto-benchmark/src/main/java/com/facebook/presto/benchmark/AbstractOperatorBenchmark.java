@@ -14,6 +14,7 @@
 package com.facebook.presto.benchmark;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.QueryId;
 import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.TaskStateMachine;
 import com.facebook.presto.memory.MemoryPool;
@@ -24,6 +25,7 @@ import com.facebook.presto.operator.OperatorFactory;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.TaskStats;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.util.CpuTimer;
 import com.facebook.presto.util.CpuTimer.CpuDuration;
@@ -34,12 +36,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
-import static java.util.Locale.ENGLISH;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -58,17 +59,26 @@ public abstract class AbstractOperatorBenchmark
             int measuredIterations)
     {
         super(benchmarkName, warmupIterations, measuredIterations);
-        this.localQueryRunner = checkNotNull(localQueryRunner, "localQueryRunner is null");
+        this.localQueryRunner = requireNonNull(localQueryRunner, "localQueryRunner is null");
     }
 
-    protected OperatorFactory createTableScanOperator(int operatorId, String tableName, String... columnNames)
+    protected OperatorFactory createTableScanOperator(int operatorId, PlanNodeId planNodeId, String tableName, String... columnNames)
     {
-        return localQueryRunner.createTableScanOperator(operatorId, tableName, columnNames);
+        return localQueryRunner.createTableScanOperator(operatorId, planNodeId, tableName, columnNames);
     }
 
-    protected OperatorFactory createHashProjectOperator(int operatorId, List<Type> types)
+    public OperatorFactory createTableScanOperator(Session session, int operatorId, PlanNodeId planNodeId, String tableName, String... columnNames)
     {
-        return localQueryRunner.createHashProjectOperator(operatorId, types);
+        return localQueryRunner.createTableScanOperator(session,
+                operatorId,
+                planNodeId,
+                tableName,
+                columnNames);
+    }
+
+    protected OperatorFactory createHashProjectOperator(int operatorId, PlanNodeId planNodeId, List<Type> types)
+    {
+        return localQueryRunner.createHashProjectOperator(operatorId, planNodeId, types);
     }
 
     protected abstract List<Driver> createDrivers(TaskContext taskContext);
@@ -93,21 +103,16 @@ public abstract class AbstractOperatorBenchmark
     @Override
     protected Map<String, Long> runOnce()
     {
-        Session session = Session.builder()
-                .setUser("user")
-                .setSource("source")
-                .setCatalog("catalog")
-                .setSchema("schema")
-                .setTimeZoneKey(UTC_KEY)
-                .setLocale(ENGLISH)
+        Session session = testSessionBuilder()
                 .setSystemProperties(ImmutableMap.of("optimizer.optimize-hash-generation", "true"))
                 .build();
         ExecutorService executor = localQueryRunner.getExecutor();
-        MemoryPool memoryPool = new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE), false);
-        TaskContext taskContext = new QueryContext(false, new DataSize(256, MEGABYTE), memoryPool, executor)
+        MemoryPool memoryPool = new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE));
+        MemoryPool systemMemoryPool = new MemoryPool(new MemoryPoolId("testSystem"), new DataSize(1, GIGABYTE));
+
+        TaskContext taskContext = new QueryContext(new QueryId("test"), new DataSize(256, MEGABYTE), memoryPool, systemMemoryPool, executor)
                 .addTaskContext(new TaskStateMachine(new TaskId("query", "stage", "task"), executor),
                         session,
-                        new DataSize(256, MEGABYTE),
                         new DataSize(1, MEGABYTE),
                         false,
                         false);

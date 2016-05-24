@@ -65,7 +65,7 @@ public final class TimestampType
     }
 
     @Override
-    public int hash(Block block, int position)
+    public long hash(Block block, int position)
     {
         long value = block.getLong(position, 0);
         return (int) (value ^ (value >>> 32));
@@ -100,5 +100,17 @@ public final class TimestampType
     public void writeLong(BlockBuilder blockBuilder, long value)
     {
         blockBuilder.writeLong(value).closeEntry();
+    }
+
+    @Override
+    public boolean equals(Object other)
+    {
+        return other == TIMESTAMP;
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return getClass().hashCode();
     }
 }

@@ -19,7 +19,7 @@ import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.testing.RunLengthEncodedBlock;
+import com.facebook.presto.spi.block.RunLengthEncodedBlock;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.primitives.Ints;
@@ -28,11 +28,13 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.BiConsumer;
 import java.util.stream.IntStream;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
-import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
+import static com.facebook.presto.util.Numbers.isFloatingNumber;
+import static com.facebook.presto.util.Numbers.isNan;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 
@@ -42,10 +44,14 @@ public final class AggregationTestUtils
     {
     }
 
-    public static void assertAggregation(InternalAggregationFunction function, double confidence, Object expectedValue, int positions, Block... blocks)
+    public static void assertAggregation(InternalAggregationFunction function, double confidence, Object expectedValue, Block... blocks)
     {
+        int positions = blocks[0].getPositionCount();
+        for (int i = 1; i < blocks.length; i++) {
+            assertEquals(positions, blocks[i].getPositionCount(), "input blocks provided are not equal in position count");
+        }
         if (positions == 0) {
-            assertAggregation(function, confidence, expectedValue);
+            assertAggregation(function, confidence, expectedValue, new Page[] {});
         }
         else if (positions == 1) {
             assertAggregation(function, confidence, expectedValue, new Page(positions, blocks));
@@ -160,14 +166,25 @@ public final class AggregationTestUtils
         return Math.abs(expected - actual) <= error && !Double.isInfinite(error);
     }
 
-    public static void assertAggregation(InternalAggregationFunction function, double confidence, Object expectedValue, Page... pages)
+    private static void assertAggregation(InternalAggregationFunction function, double confidence, Object expectedValue, Page... pages)
     {
-        assertEquals(aggregation(function, confidence, pages), expectedValue);
-        assertEquals(partialAggregation(function, confidence, pages), expectedValue);
+        BiConsumer<Object, Object> equalAssertion = (actual, expected) -> {
+            assertEquals(actual, expected);
+        };
+        if (isFloatingNumber(expectedValue) && !isNan(expectedValue)) {
+            equalAssertion = (actual, expected) -> {
+                assertEquals((double) actual, (double) expected, 1e-10);
+            };
+        }
+
+        // This assertAggregation does not try to split up the page to test the correctness of combine function.
+        // Do not use this directly. Always use the other assertAggregation.
+        equalAssertion.accept(aggregation(function, confidence, pages), expectedValue);
+        equalAssertion.accept(partialAggregation(function, confidence, pages), expectedValue);
         if (pages.length > 0) {
-            assertEquals(groupedAggregation(function, confidence, pages), expectedValue);
-            assertEquals(groupedPartialAggregation(function, confidence, pages), expectedValue);
-            assertEquals(distinctAggregation(function, confidence, pages), expectedValue);
+            equalAssertion.accept(groupedAggregation(function, confidence, pages), expectedValue);
+            equalAssertion.accept(groupedPartialAggregation(function, confidence, pages), expectedValue);
+            equalAssertion.accept(distinctAggregation(function, confidence, pages), expectedValue);
         }
     }
 
@@ -422,7 +439,7 @@ public final class AggregationTestUtils
                 newBlocks[channel] = createNullRLEBlock(page.getPositionCount());
             }
             for (int channel = 0; channel < page.getBlocks().length; channel++) {
-                newBlocks[channel + offset] = page.getBlocks()[channel];
+                newBlocks[channel + offset] = page.getBlock(channel);
             }
             newPages[i] = new Page(page.getPositionCount(), newBlocks);
         }
@@ -448,23 +465,5 @@ public final class AggregationTestUtils
     public static double[] constructDoublePrimitiveArray(int start, int length)
     {
         return IntStream.range(start, start + length).asDoubleStream().toArray();
-    }
-
-    public static Block createDoubleSequenceBlock(int start, int length)
-    {
-        BlockBuilder blockBuilder = DOUBLE.createBlockBuilder(new BlockBuilderStatus(), length);
-        for (int i = start; i < start + length; i++) {
-            DOUBLE.writeDouble(blockBuilder, i);
-        }
-        return blockBuilder.build();
-    }
-
-    public static Block createDoubleArbitraryBlock(double... values)
-    {
-        BlockBuilder blockBuilder = DOUBLE.createBlockBuilder(new BlockBuilderStatus(), values.length);
-        for (double i : values) {
-            DOUBLE.writeDouble(blockBuilder, i);
-        }
-        return blockBuilder.build();
     }
 }

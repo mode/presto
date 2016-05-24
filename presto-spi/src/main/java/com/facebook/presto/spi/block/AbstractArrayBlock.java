@@ -14,7 +14,11 @@
 package com.facebook.presto.spi.block;
 
 import io.airlift.slice.Slice;
+import io.airlift.slice.SliceOutput;
 import io.airlift.slice.Slices;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public abstract class AbstractArrayBlock
         implements Block
@@ -36,6 +40,34 @@ public abstract class AbstractArrayBlock
     private int getOffset(int position)
     {
         return position == 0 ? 0 : getOffsets().getInt((position - 1) * 4) - getOffsetBase();
+    }
+
+    @Override
+    public Block copyPositions(List<Integer> positions)
+    {
+        SliceOutput newOffsets = Slices.allocate(positions.size() * Integer.BYTES).getOutput();
+        SliceOutput newValueIsNull = Slices.allocate(positions.size()).getOutput();
+
+        List<Integer> valuesPositions = new ArrayList<>();
+        int countNewOffset = 0;
+        for (int position : positions) {
+            if (isNull(position)) {
+                newValueIsNull.appendByte(1);
+                newOffsets.appendInt(countNewOffset);
+            }
+            else {
+                newValueIsNull.appendByte(0);
+                int positionStartOffset = getOffset(position);
+                int positionEndOffset = getOffset(position + 1);
+                countNewOffset += positionEndOffset - positionStartOffset;
+                newOffsets.appendInt(countNewOffset);
+                for (int j = positionStartOffset; j < positionEndOffset; j++) {
+                    valuesPositions.add(j);
+                }
+            }
+        }
+        Block newValues = getValues().copyPositions(valuesPositions);
+        return new ArrayBlock(newValues, newOffsets.slice(), 0, newValueIsNull.slice());
     }
 
     @Override
@@ -95,18 +127,6 @@ public abstract class AbstractArrayBlock
     }
 
     @Override
-    public int getSizeInBytes()
-    {
-        return getValues().getSizeInBytes() + getOffsets().length() + getValueIsNull().length();
-    }
-
-    @Override
-    public int getRetainedSizeInBytes()
-    {
-        return getValues().getRetainedSizeInBytes() + getOffsets().getRetainedSize() + getValueIsNull().getRetainedSize();
-    }
-
-    @Override
     public <T> T getObject(int position, Class<T> clazz)
     {
         if (clazz != Block.class) {
@@ -122,7 +142,19 @@ public abstract class AbstractArrayBlock
     @Override
     public void writePositionTo(int position, BlockBuilder blockBuilder)
     {
-        blockBuilder.writeObject(getObject(position, Block.class));
+        checkReadablePosition(position);
+        BlockBuilder entryBuilder = blockBuilder.beginBlockEntry();
+        int startValueOffset = getOffset(position);
+        int endValueOffset = getOffset(position + 1);
+        for (int i = startValueOffset; i < endValueOffset; i++) {
+            if (getValues().isNull(i)) {
+                entryBuilder.appendNull();
+            }
+            else {
+                getValues().writePositionTo(i, entryBuilder);
+                entryBuilder.closeEntry();
+            }
+        }
     }
 
     @Override
@@ -180,7 +212,7 @@ public abstract class AbstractArrayBlock
     }
 
     @Override
-    public int hash(int position, int offset, int length)
+    public long hash(int position, int offset, int length)
     {
         throw new UnsupportedOperationException();
     }

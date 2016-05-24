@@ -26,7 +26,8 @@ import java.util.concurrent.TimeUnit;
 @DefunctConfig({"query.max-pending-splits-per-node",
                 "experimental.big-query-initial-hash-partitions",
                 "experimental.max-concurrent-big-queries",
-                "experimental.max-queued-big-queries"})
+                "experimental.max-queued-big-queries",
+                "query.remote-task.max-consecutive-error-count"})
 public class QueryManagerConfig
 {
     private int scheduleSplitBatchSize = 1000;
@@ -34,16 +35,19 @@ public class QueryManagerConfig
     private int maxQueuedQueries = 5000;
     private String queueConfigFile;
 
-    private int initialHashPartitions = 8;
+    private int initialHashPartitions = 100;
     private Duration maxQueryAge = new Duration(15, TimeUnit.MINUTES);
     private int maxQueryHistory = 100;
     private Duration clientTimeout = new Duration(5, TimeUnit.MINUTES);
 
     private int queryManagerExecutorPoolSize = 5;
 
-    private int remoteTaskMaxConsecutiveErrorCount = 10;
     private Duration remoteTaskMinErrorDuration = new Duration(2, TimeUnit.MINUTES);
     private int remoteTaskMaxCallbackThreads = 1000;
+
+    private String queryExecutionPolicy = "all-at-once";
+    private Duration queryMaxRunTime = new Duration(100, TimeUnit.DAYS);
+    private Duration queryMaxCpuTime = new Duration(1_000_000_000, TimeUnit.DAYS);
 
     public String getQueueConfigFile()
     {
@@ -166,20 +170,8 @@ public class QueryManagerConfig
         return this;
     }
 
-    @Min(0)
-    public int getRemoteTaskMaxConsecutiveErrorCount()
-    {
-        return remoteTaskMaxConsecutiveErrorCount;
-    }
-
-    @Config("query.remote-task.max-consecutive-error-count")
-    public QueryManagerConfig setRemoteTaskMaxConsecutiveErrorCount(int remoteTaskMaxConsecutiveErrorCount)
-    {
-        this.remoteTaskMaxConsecutiveErrorCount = remoteTaskMaxConsecutiveErrorCount;
-        return this;
-    }
-
     @NotNull
+    @MinDuration("1s")
     public Duration getRemoteTaskMinErrorDuration()
     {
         return remoteTaskMinErrorDuration;
@@ -189,6 +181,33 @@ public class QueryManagerConfig
     public QueryManagerConfig setRemoteTaskMinErrorDuration(Duration remoteTaskMinErrorDuration)
     {
         this.remoteTaskMinErrorDuration = remoteTaskMinErrorDuration;
+        return this;
+    }
+
+    @NotNull
+    public Duration getQueryMaxRunTime()
+    {
+        return queryMaxRunTime;
+    }
+
+    @Config("query.max-run-time")
+    public QueryManagerConfig setQueryMaxRunTime(Duration queryMaxRunTime)
+    {
+        this.queryMaxRunTime = queryMaxRunTime;
+        return this;
+    }
+
+    @NotNull
+    @MinDuration("1ns")
+    public Duration getQueryMaxCpuTime()
+    {
+        return queryMaxCpuTime;
+    }
+
+    @Config("query.max-cpu-time")
+    public QueryManagerConfig setQueryMaxCpuTime(Duration queryMaxCpuTime)
+    {
+        this.queryMaxCpuTime = queryMaxCpuTime;
         return this;
     }
 
@@ -202,6 +221,19 @@ public class QueryManagerConfig
     public QueryManagerConfig setRemoteTaskMaxCallbackThreads(int remoteTaskMaxCallbackThreads)
     {
         this.remoteTaskMaxCallbackThreads = remoteTaskMaxCallbackThreads;
+        return this;
+    }
+
+    @NotNull
+    public String getQueryExecutionPolicy()
+    {
+        return queryExecutionPolicy;
+    }
+
+    @Config("query.execution-policy")
+    public QueryManagerConfig setQueryExecutionPolicy(String queryExecutionPolicy)
+    {
+        this.queryExecutionPolicy = queryExecutionPolicy;
         return this;
     }
 }

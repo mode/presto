@@ -16,29 +16,25 @@ package com.facebook.presto.hive.orc;
 import com.facebook.presto.hive.HiveColumnHandle;
 import com.facebook.presto.hive.HivePartitionKey;
 import com.facebook.presto.hive.HiveUtil;
-import com.facebook.presto.orc.BooleanVector;
-import com.facebook.presto.orc.DoubleVector;
-import com.facebook.presto.orc.LongVector;
 import com.facebook.presto.orc.OrcCorruptionException;
 import com.facebook.presto.orc.OrcDataSource;
 import com.facebook.presto.orc.OrcRecordReader;
-import com.facebook.presto.orc.SliceVector;
+import com.facebook.presto.orc.memory.AggregatedMemoryContext;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
+import com.facebook.presto.spi.block.LazyBlock;
 import com.facebook.presto.spi.block.LazyBlockLoader;
-import com.facebook.presto.spi.block.LazyFixedWidthBlock;
-import com.facebook.presto.spi.block.LazySliceArrayBlock;
+import com.facebook.presto.spi.type.DecimalType;
 import com.facebook.presto.spi.type.FixedWidthType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
-import io.airlift.slice.Slices;
 import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
@@ -51,32 +47,33 @@ import static com.facebook.presto.hive.HiveUtil.bigintPartitionKey;
 import static com.facebook.presto.hive.HiveUtil.booleanPartitionKey;
 import static com.facebook.presto.hive.HiveUtil.datePartitionKey;
 import static com.facebook.presto.hive.HiveUtil.doublePartitionKey;
+import static com.facebook.presto.hive.HiveUtil.integerPartitionKey;
+import static com.facebook.presto.hive.HiveUtil.longDecimalPartitionKey;
+import static com.facebook.presto.hive.HiveUtil.shortDecimalPartitionKey;
+import static com.facebook.presto.hive.HiveUtil.smallintPartitionKey;
 import static com.facebook.presto.hive.HiveUtil.timestampPartitionKey;
-import static com.facebook.presto.orc.Vector.MAX_VECTOR_LENGTH;
+import static com.facebook.presto.hive.HiveUtil.tinyintPartitionKey;
+import static com.facebook.presto.hive.HiveUtil.varcharPartitionKey;
+import static com.facebook.presto.orc.OrcReader.MAX_BATCH_SIZE;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DateType.DATE;
+import static com.facebook.presto.spi.type.Decimals.isLongDecimal;
+import static com.facebook.presto.spi.type.Decimals.isShortDecimal;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
-import static com.facebook.presto.spi.type.StandardTypes.ARRAY;
-import static com.facebook.presto.spi.type.StandardTypes.MAP;
-import static com.facebook.presto.spi.type.StandardTypes.ROW;
+import static com.facebook.presto.spi.type.IntegerType.INTEGER;
+import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
 import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
+import static com.facebook.presto.spi.type.TinyintType.TINYINT;
+import static com.facebook.presto.spi.type.Varchars.isVarcharType;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Maps.uniqueIndex;
-import static io.airlift.slice.Slices.wrappedBooleanArray;
-import static io.airlift.slice.Slices.wrappedDoubleArray;
-import static io.airlift.slice.Slices.wrappedIntArray;
-import static io.airlift.slice.Slices.wrappedLongArray;
-import static java.lang.Math.max;
-import static java.lang.Math.min;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 
 public class OrcPageSource
         implements ConnectorPageSource
@@ -87,15 +84,14 @@ public class OrcPageSource
 
     private final List<String> columnNames;
     private final List<Type> types;
-    private final boolean[] isStructuralType;
 
     private final Block[] constantBlocks;
     private final int[] hiveColumnIndexes;
 
-    private long completedBytes;
-
     private int batchId;
     private boolean closed;
+
+    private final AggregatedMemoryContext systemMemoryContext;
 
     public OrcPageSource(
             OrcRecordReader recordReader,
@@ -103,16 +99,15 @@ public class OrcPageSource
             List<HivePartitionKey> partitionKeys,
             List<HiveColumnHandle> columns,
             DateTimeZone hiveStorageTimeZone,
-            TypeManager typeManager)
+            TypeManager typeManager,
+            AggregatedMemoryContext systemMemoryContext)
     {
-        this.recordReader = checkNotNull(recordReader, "recordReader is null");
-        this.orcDataSource = checkNotNull(orcDataSource, "orcDataSource is null");
+        this.recordReader = requireNonNull(recordReader, "recordReader is null");
+        this.orcDataSource = requireNonNull(orcDataSource, "orcDataSource is null");
 
-        Map<String, HivePartitionKey> partitionKeysByName = uniqueIndex(checkNotNull(partitionKeys, "partitionKeys is null"), HivePartitionKey::getName);
+        Map<String, HivePartitionKey> partitionKeysByName = uniqueIndex(requireNonNull(partitionKeys, "partitionKeys is null"), HivePartitionKey::getName);
 
-        int size = checkNotNull(columns, "columns is null").size();
-
-        this.isStructuralType = new boolean[size];
+        int size = requireNonNull(columns, "columns is null").size();
 
         this.constantBlocks = new Block[size];
         this.hiveColumnIndexes = new int[size];
@@ -128,9 +123,6 @@ public class OrcPageSource
             namesBuilder.add(name);
             typesBuilder.add(type);
 
-            String typeBase = column.getTypeSignature().getBase();
-            isStructuralType[columnIndex] = ARRAY.equals(typeBase) || MAP.equals(typeBase) || ROW.equals(typeBase);
-
             hiveColumnIndexes[columnIndex] = column.getHiveColumnIndex();
 
             if (column.isPartitionKey()) {
@@ -141,51 +133,81 @@ public class OrcPageSource
 
                 BlockBuilder blockBuilder;
                 if (type instanceof FixedWidthType) {
-                    blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), MAX_VECTOR_LENGTH);
+                    blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), MAX_BATCH_SIZE);
                 }
                 else {
-                    blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), MAX_VECTOR_LENGTH, bytes.length);
+                    blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), MAX_BATCH_SIZE, bytes.length);
                 }
 
                 if (HiveUtil.isHiveNull(bytes)) {
-                    for (int i = 0; i < MAX_VECTOR_LENGTH; i++) {
+                    for (int i = 0; i < MAX_BATCH_SIZE; i++) {
                         blockBuilder.appendNull();
                     }
                 }
                 else if (type.equals(BOOLEAN)) {
                     boolean value = booleanPartitionKey(partitionKey.getValue(), name);
-                    for (int i = 0; i < MAX_VECTOR_LENGTH; i++) {
+                    for (int i = 0; i < MAX_BATCH_SIZE; i++) {
                         BOOLEAN.writeBoolean(blockBuilder, value);
                     }
                 }
                 else if (type.equals(BIGINT)) {
                     long value = bigintPartitionKey(partitionKey.getValue(), name);
-                    for (int i = 0; i < MAX_VECTOR_LENGTH; i++) {
+                    for (int i = 0; i < MAX_BATCH_SIZE; i++) {
                         BIGINT.writeLong(blockBuilder, value);
+                    }
+                }
+                else if (type.equals(INTEGER)) {
+                    long value = integerPartitionKey(partitionKey.getValue(), name);
+                    for (int i = 0; i < MAX_BATCH_SIZE; i++) {
+                        INTEGER.writeLong(blockBuilder, value);
+                    }
+                }
+                else if (type.equals(SMALLINT)) {
+                    long value = smallintPartitionKey(partitionKey.getValue(), name);
+                    for (int i = 0; i < MAX_BATCH_SIZE; i++) {
+                        SMALLINT.writeLong(blockBuilder, value);
+                    }
+                }
+                else if (type.equals(TINYINT)) {
+                    long value = tinyintPartitionKey(partitionKey.getValue(), name);
+                    for (int i = 0; i < MAX_BATCH_SIZE; i++) {
+                        TINYINT.writeLong(blockBuilder, value);
                     }
                 }
                 else if (type.equals(DOUBLE)) {
                     double value = doublePartitionKey(partitionKey.getValue(), name);
-                    for (int i = 0; i < MAX_VECTOR_LENGTH; i++) {
+                    for (int i = 0; i < MAX_BATCH_SIZE; i++) {
                         DOUBLE.writeDouble(blockBuilder, value);
                     }
                 }
-                else if (type.equals(VARCHAR)) {
-                    Slice value = Slices.wrappedBuffer(bytes);
-                    for (int i = 0; i < MAX_VECTOR_LENGTH; i++) {
-                        VARCHAR.writeSlice(blockBuilder, value);
+                else if (isVarcharType(type)) {
+                    Slice value = varcharPartitionKey(partitionKey.getValue(), name, type);
+                    for (int i = 0; i < MAX_BATCH_SIZE; i++) {
+                        type.writeSlice(blockBuilder, value);
                     }
                 }
                 else if (type.equals(DATE)) {
                     long value = datePartitionKey(partitionKey.getValue(), name);
-                    for (int i = 0; i < MAX_VECTOR_LENGTH; i++) {
+                    for (int i = 0; i < MAX_BATCH_SIZE; i++) {
                         DATE.writeLong(blockBuilder, value);
                     }
                 }
                 else if (type.equals(TIMESTAMP)) {
                     long value = timestampPartitionKey(partitionKey.getValue(), hiveStorageTimeZone, name);
-                    for (int i = 0; i < MAX_VECTOR_LENGTH; i++) {
+                    for (int i = 0; i < MAX_BATCH_SIZE; i++) {
                         TIMESTAMP.writeLong(blockBuilder, value);
+                    }
+                }
+                else if (isShortDecimal(type)) {
+                    long value = shortDecimalPartitionKey(partitionKey.getValue(), (DecimalType) type, name);
+                    for (int i = 0; i < MAX_BATCH_SIZE; i++) {
+                        type.writeLong(blockBuilder, value);
+                    }
+                }
+                else if (isLongDecimal(type)) {
+                    Slice value = longDecimalPartitionKey(partitionKey.getValue(), (DecimalType) type, name);
+                    for (int i = 0; i < MAX_BATCH_SIZE; i++) {
+                        type.writeSlice(blockBuilder, value);
                     }
                 }
                 else {
@@ -195,8 +217,8 @@ public class OrcPageSource
                 constantBlocks[columnIndex] = blockBuilder.build();
             }
             else if (!recordReader.isColumnPresent(column.getHiveColumnIndex())) {
-                BlockBuilder blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), MAX_VECTOR_LENGTH, NULL_ENTRY_SIZE);
-                for (int i = 0; i < MAX_VECTOR_LENGTH; i++) {
+                BlockBuilder blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), MAX_BATCH_SIZE, NULL_ENTRY_SIZE);
+                for (int i = 0; i < MAX_BATCH_SIZE; i++) {
                     blockBuilder.appendNull();
                 }
                 constantBlocks[columnIndex] = blockBuilder.build();
@@ -204,6 +226,8 @@ public class OrcPageSource
         }
         types = typesBuilder.build();
         columnNames = namesBuilder.build();
+
+        this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null");
     }
 
     @Override
@@ -215,7 +239,7 @@ public class OrcPageSource
     @Override
     public long getCompletedBytes()
     {
-        return completedBytes;
+        return orcDataSource.getReadBytes();
     }
 
     @Override
@@ -247,31 +271,11 @@ public class OrcPageSource
                 if (constantBlocks[fieldId] != null) {
                     blocks[fieldId] = constantBlocks[fieldId].getRegion(0, batchSize);
                 }
-                else if (BOOLEAN.equals(type)) {
-                    blocks[fieldId] = new LazyFixedWidthBlock(BOOLEAN.getFixedSize(), batchSize, new LazyBooleanBlockLoader(hiveColumnIndexes[fieldId], batchSize));
-                }
-                else if (DATE.equals(type)) {
-                    blocks[fieldId] = new LazyFixedWidthBlock(DATE.getFixedSize(), batchSize, new LazyDateBlockLoader(hiveColumnIndexes[fieldId], batchSize));
-                }
-                else if (BIGINT.equals(type) || TIMESTAMP.equals(type)) {
-                    blocks[fieldId] = new LazyFixedWidthBlock(((FixedWidthType) type).getFixedSize(), batchSize, new LazyLongBlockLoader(hiveColumnIndexes[fieldId], batchSize));
-                }
-                else if (DOUBLE.equals(type)) {
-                    blocks[fieldId] = new LazyFixedWidthBlock(DOUBLE.getFixedSize(), batchSize, new LazyDoubleBlockLoader(hiveColumnIndexes[fieldId], batchSize));
-                }
-                else if (VARCHAR.equals(type) || VARBINARY.equals(type) || isStructuralType[fieldId]) {
-                    blocks[fieldId] = new LazySliceArrayBlock(batchSize, new LazySliceBlockLoader(hiveColumnIndexes[fieldId], batchSize));
-                }
                 else {
-                    throw new PrestoException(NOT_SUPPORTED, "Unsupported column type: " + type);
+                    blocks[fieldId] = new LazyBlock(batchSize, new OrcBlockLoader(hiveColumnIndexes[fieldId], type));
                 }
             }
-            Page page = new Page(batchSize, blocks);
-
-            long newCompletedBytes = (long) (recordReader.getSplitLength() * recordReader.getProgress());
-            completedBytes = min(recordReader.getSplitLength(), max(completedBytes, newCompletedBytes));
-
-            return page;
+            return new Page(batchSize, blocks);
         }
         catch (PrestoException e) {
             closeWithSuppression(e);
@@ -309,9 +313,15 @@ public class OrcPageSource
                 .toString();
     }
 
+    @Override
+    public long getSystemMemoryUsage()
+    {
+        return systemMemoryContext.getBytes();
+    }
+
     protected void closeWithSuppression(Throwable throwable)
     {
-        checkNotNull(throwable, "throwable is null");
+        requireNonNull(throwable, "throwable is null");
         try {
             close();
         }
@@ -320,165 +330,41 @@ public class OrcPageSource
         }
     }
 
-    private final class LazyBooleanBlockLoader
-            implements LazyBlockLoader<LazyFixedWidthBlock>
+    private final class OrcBlockLoader
+            implements LazyBlockLoader<LazyBlock>
     {
         private final int expectedBatchId = batchId;
-        private final int batchSize;
-        private final int hiveColumnIndex;
+        private final int columnIndex;
+        private final Type type;
+        private boolean loaded;
 
-        public LazyBooleanBlockLoader(int hiveColumnIndex, int batchSize)
+        public OrcBlockLoader(int columnIndex, Type type)
         {
-            this.batchSize = batchSize;
-            this.hiveColumnIndex = hiveColumnIndex;
+            this.columnIndex = columnIndex;
+            this.type = requireNonNull(type, "type is null");
         }
 
         @Override
-        public void load(LazyFixedWidthBlock block)
+        public final void load(LazyBlock lazyBlock)
         {
+            if (loaded) {
+                return;
+            }
+
             checkState(batchId == expectedBatchId);
+
             try {
-                BooleanVector vector = new BooleanVector(batchSize);
-                recordReader.readVector(hiveColumnIndex, vector);
-                block.setNullVector(vector.isNull);
-                block.setRawSlice(wrappedBooleanArray(vector.vector, 0, batchSize));
+                Block block = recordReader.readBlock(type, columnIndex);
+                lazyBlock.setBlock(block);
             }
             catch (IOException e) {
-                throw propagateException(e);
-            }
-        }
-    }
-
-    private final class LazyDateBlockLoader
-            implements LazyBlockLoader<LazyFixedWidthBlock>
-    {
-        private final int expectedBatchId = batchId;
-        private final int batchSize;
-        private final int hiveColumnIndex;
-
-        public LazyDateBlockLoader(int hiveColumnIndex, int batchSize)
-        {
-            this.batchSize = batchSize;
-            this.hiveColumnIndex = hiveColumnIndex;
-        }
-
-        @Override
-        public void load(LazyFixedWidthBlock block)
-        {
-            checkState(batchId == expectedBatchId);
-            try {
-                LongVector vector = new LongVector(batchSize);
-                recordReader.readVector(hiveColumnIndex, vector);
-                block.setNullVector(vector.isNull);
-
-                // Presto stores dates as ints in memory, so convert to int array
-                // TODO to add an ORC int vector
-                int[] days = new int[batchSize];
-                for (int i = 0; i < batchSize; i++) {
-                    days[i] = (int) vector.vector[i];
+                if (e instanceof OrcCorruptionException) {
+                    throw new PrestoException(HIVE_BAD_DATA, e);
                 }
-
-                block.setRawSlice(wrappedIntArray(days, 0, batchSize));
+                throw new PrestoException(HIVE_CURSOR_ERROR, e);
             }
-            catch (IOException e) {
-                throw propagateException(e);
-            }
+
+            loaded = true;
         }
-    }
-
-    private final class LazyLongBlockLoader
-            implements LazyBlockLoader<LazyFixedWidthBlock>
-    {
-        private final int expectedBatchId = batchId;
-        private final int batchSize;
-        private final int hiveColumnIndex;
-
-        public LazyLongBlockLoader(int hiveColumnIndex, int batchSize)
-        {
-            this.batchSize = batchSize;
-            this.hiveColumnIndex = hiveColumnIndex;
-        }
-
-        @Override
-        public void load(LazyFixedWidthBlock block)
-        {
-            checkState(batchId == expectedBatchId);
-            try {
-                LongVector vector = new LongVector(batchSize);
-                recordReader.readVector(hiveColumnIndex, vector);
-                block.setNullVector(vector.isNull);
-                block.setRawSlice(wrappedLongArray(vector.vector, 0, batchSize));
-            }
-            catch (IOException e) {
-                throw propagateException(e);
-            }
-        }
-    }
-
-    private final class LazyDoubleBlockLoader
-            implements LazyBlockLoader<LazyFixedWidthBlock>
-    {
-        private final int expectedBatchId = batchId;
-
-        private final int batchSize;
-        private final int hiveColumnIndex;
-
-        public LazyDoubleBlockLoader(int hiveColumnIndex, int batchSize)
-        {
-            this.batchSize = batchSize;
-            this.hiveColumnIndex = hiveColumnIndex;
-        }
-
-        @Override
-        public void load(LazyFixedWidthBlock block)
-        {
-            checkState(batchId == expectedBatchId);
-            try {
-                DoubleVector vector = new DoubleVector(batchSize);
-                recordReader.readVector(hiveColumnIndex, vector);
-                block.setNullVector(vector.isNull);
-                block.setRawSlice(wrappedDoubleArray(vector.vector, 0, batchSize));
-            }
-            catch (IOException e) {
-                throw propagateException(e);
-            }
-        }
-    }
-
-    private final class LazySliceBlockLoader
-            implements LazyBlockLoader<LazySliceArrayBlock>
-    {
-        private final int expectedBatchId = batchId;
-
-        private final int batchSize;
-        private final int hiveColumnIndex;
-
-        public LazySliceBlockLoader(int hiveColumnIndex, int batchSize)
-        {
-            this.batchSize = batchSize;
-            this.hiveColumnIndex = hiveColumnIndex;
-        }
-
-        @Override
-        public void load(LazySliceArrayBlock block)
-        {
-            checkState(batchId == expectedBatchId);
-            try {
-                SliceVector vector = new SliceVector(batchSize);
-                recordReader.readVector(hiveColumnIndex, vector);
-                block.setValues(vector.vector);
-            }
-            catch (IOException e) {
-                throw propagateException(e);
-            }
-        }
-    }
-
-    private static RuntimeException propagateException(IOException e)
-    {
-        if (e instanceof OrcCorruptionException) {
-            throw new PrestoException(HIVE_BAD_DATA, e);
-        }
-        throw new PrestoException(HIVE_CURSOR_ERROR, e);
     }
 }

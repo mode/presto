@@ -13,10 +13,12 @@
  */
 package com.facebook.presto.operator.scalar;
 
-import com.facebook.presto.metadata.FunctionInfo;
+import com.facebook.presto.annotation.UsedByGeneratedCode;
+import com.facebook.presto.metadata.BoundVariables;
+import com.facebook.presto.metadata.FunctionKind;
 import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.ParametricScalar;
 import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
@@ -33,38 +35,43 @@ import java.lang.invoke.MethodHandle;
 import java.util.List;
 import java.util.Map;
 
+import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.metadata.OperatorType.CAST;
 import static com.facebook.presto.metadata.Signature.internalOperator;
-import static com.facebook.presto.metadata.Signature.typeParameter;
+import static com.facebook.presto.metadata.Signature.typeVariable;
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
+import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
-import static com.facebook.presto.type.TypeUtils.readStructuralBlock;
-import static com.facebook.presto.util.Failures.checkCondition;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static java.lang.String.format;
 
 public final class ArrayJoin
-        extends ParametricScalar
+        extends SqlScalarFunction
 {
     public static final ArrayJoin ARRAY_JOIN = new ArrayJoin();
     public static final ArrayJoinWithNullReplacement ARRAY_JOIN_WITH_NULL_REPLACEMENT = new ArrayJoinWithNullReplacement();
 
-    private static final TypeSignature VARCHAR_TYPE_SIGNATURE = parseTypeSignature(StandardTypes.VARCHAR);
+    private static final TypeSignature VARCHAR_TYPE_SIGNATURE = VARCHAR.getTypeSignature();
     private static final String FUNCTION_NAME = "array_join";
     private static final String DESCRIPTION = "Concatenates the elements of the given array using a delimiter and an optional string to replace nulls";
-    private static final Signature SIGNATURE = new Signature(FUNCTION_NAME,  ImmutableList.of(typeParameter("T")), StandardTypes.VARCHAR, ImmutableList.of("array<T>", StandardTypes.VARCHAR), false, false);
+    private static final MethodHandle METHOD_HANDLE = methodHandle(ArrayJoin.class, "arrayJoin", MethodHandle.class, Type.class, ConnectorSession.class, Block.class, Slice.class);
 
     public static class ArrayJoinWithNullReplacement
-            extends ParametricScalar
+            extends SqlScalarFunction
     {
-        private final Signature signature = new Signature(FUNCTION_NAME, ImmutableList.of(typeParameter("T")), StandardTypes.VARCHAR, ImmutableList.of("array<T>", StandardTypes.VARCHAR, StandardTypes.VARCHAR), false, false);
+        private static final MethodHandle METHOD_HANDLE = methodHandle(ArrayJoin.class, "arrayJoin", MethodHandle.class, Type.class, ConnectorSession.class, Block.class, Slice.class, Slice.class);
 
-        @Override
-        public Signature getSignature()
+        public ArrayJoinWithNullReplacement()
         {
-            return signature;
+            super(new Signature(FUNCTION_NAME,
+                    FunctionKind.SCALAR,
+                    ImmutableList.of(typeVariable("T")),
+                    ImmutableList.of(),
+                    parseTypeSignature(StandardTypes.VARCHAR),
+                    ImmutableList.of(parseTypeSignature("array(T)"), parseTypeSignature(StandardTypes.VARCHAR), parseTypeSignature(StandardTypes.VARCHAR)),
+                    false));
         }
 
         @Override
@@ -86,20 +93,24 @@ public final class ArrayJoin
         }
 
         @Override
-        public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+        public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
         {
-            Type type = types.get("T");
+            Type type = boundVariables.getTypeVariable("T");
             TypeSignature arrayType = parameterizedTypeName(StandardTypes.ARRAY, type.getTypeSignature());
-            Signature signature = new Signature(FUNCTION_NAME, VARCHAR_TYPE_SIGNATURE, arrayType, VARCHAR_TYPE_SIGNATURE, VARCHAR_TYPE_SIGNATURE);
-            MethodHandle methodHandle = methodHandle(ArrayJoin.class, "arrayJoin", FunctionInfo.class, Type.class, ConnectorSession.class, Slice.class, Slice.class, Slice.class);
-            return specializeArrayJoin(types, functionRegistry, ImmutableList.of(false, false, false), signature, methodHandle);
+            Signature signature = new Signature(FUNCTION_NAME, SCALAR, VARCHAR_TYPE_SIGNATURE, arrayType, VARCHAR_TYPE_SIGNATURE, VARCHAR_TYPE_SIGNATURE);
+            return specializeArrayJoin(boundVariables.getTypeVariables(), functionRegistry, ImmutableList.of(false, false, false), signature, METHOD_HANDLE);
         }
     }
 
-    @Override
-    public Signature getSignature()
+    public ArrayJoin()
     {
-        return SIGNATURE;
+        super(new Signature(FUNCTION_NAME,
+                FunctionKind.SCALAR,
+                ImmutableList.of(typeVariable("T")),
+                ImmutableList.of(),
+                parseTypeSignature(StandardTypes.VARCHAR),
+                ImmutableList.of(parseTypeSignature("array(T)"), parseTypeSignature(StandardTypes.VARCHAR)),
+                false));
     }
 
     @Override
@@ -121,45 +132,48 @@ public final class ArrayJoin
     }
 
     @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
-        Type type = types.get("T");
+        Type type = boundVariables.getTypeVariable("T");
         TypeSignature arrayType = parameterizedTypeName(StandardTypes.ARRAY, type.getTypeSignature());
-        Signature signature = new Signature(FUNCTION_NAME, VARCHAR_TYPE_SIGNATURE, arrayType, VARCHAR_TYPE_SIGNATURE);
-        MethodHandle methodHandle = methodHandle(ArrayJoin.class, "arrayJoin", FunctionInfo.class, Type.class, ConnectorSession.class, Slice.class, Slice.class);
-        return specializeArrayJoin(types, functionRegistry, ImmutableList.of(false, false), signature, methodHandle);
+        Signature signature = new Signature(FUNCTION_NAME, SCALAR, VARCHAR_TYPE_SIGNATURE, arrayType, VARCHAR_TYPE_SIGNATURE);
+        return specializeArrayJoin(boundVariables.getTypeVariables(), functionRegistry, ImmutableList.of(false, false), signature, METHOD_HANDLE);
     }
 
-    private static FunctionInfo specializeArrayJoin(Map<String, Type> types, FunctionRegistry functionRegistry, List<Boolean> nullableArguments, Signature signature, MethodHandle methodHandle)
+    private static ScalarFunctionImplementation specializeArrayJoin(Map<String, Type> types, FunctionRegistry functionRegistry, List<Boolean> nullableArguments, Signature signature, MethodHandle methodHandle)
     {
         Type type = types.get("T");
-        FunctionInfo castFunction = functionRegistry.getExactFunction(internalOperator(CAST.name(), VARCHAR_TYPE_SIGNATURE, ImmutableList.of(type.getTypeSignature())));
-
-        if (!(type instanceof UnknownType)) {
-            checkCondition(castFunction != null, INVALID_FUNCTION_ARGUMENT, "Input type %s not supported", type);
+        if (type instanceof UnknownType) {
+            return new ScalarFunctionImplementation(false, nullableArguments, methodHandle.bindTo(null).bindTo(type), true);
         }
-
-        return new FunctionInfo(signature, DESCRIPTION, false, methodHandle.bindTo(castFunction).bindTo(type), true, false, nullableArguments);
+        else {
+            try {
+                ScalarFunctionImplementation castFunction = functionRegistry.getScalarFunctionImplementation(internalOperator(CAST.name(), VARCHAR_TYPE_SIGNATURE, ImmutableList.of(type.getTypeSignature())));
+                return new ScalarFunctionImplementation(false, nullableArguments, methodHandle.bindTo(castFunction.getMethodHandle()).bindTo(type), true);
+            }
+            catch (PrestoException e) {
+                throw new PrestoException(INVALID_FUNCTION_ARGUMENT, format("Input type %s not supported", type), e);
+            }
+        }
     }
 
-    public static Slice arrayJoin(FunctionInfo castFunction, Type elementType, ConnectorSession session, Slice array, Slice delimiter)
+    @UsedByGeneratedCode
+    public static Slice arrayJoin(MethodHandle castFunction, Type elementType, ConnectorSession session, Block arrayBlock, Slice delimiter)
     {
-        return arrayJoin(castFunction, elementType, session, array, delimiter, null);
+        return arrayJoin(castFunction, elementType, session, arrayBlock, delimiter, null);
     }
 
-    public static Slice arrayJoin(FunctionInfo castFunction, Type elementType, ConnectorSession session, Slice array, Slice delimiter, Slice nullReplacement)
+    public static Slice arrayJoin(MethodHandle castFunction, Type elementType, ConnectorSession session, Block arrayBlock, Slice delimiter, Slice nullReplacement)
     {
-        Block arrayBlock = readStructuralBlock(array);
         int numElements = arrayBlock.getPositionCount();
-        DynamicSliceOutput sliceOutput = new DynamicSliceOutput(array.length());
+
+        DynamicSliceOutput sliceOutput = new DynamicSliceOutput(arrayBlock.getSizeInBytes() + delimiter.length() * arrayBlock.getPositionCount());
         Class<?> javaType = elementType.getJavaType();
 
         Class<?>[] parameters = null;
-        MethodHandle castFunctionHandle = null;
         // can be null for the unknown type
         if (castFunction != null) {
-            parameters = castFunction.getMethodHandle().type().parameterArray();
-            castFunctionHandle = castFunction.getMethodHandle();
+            parameters = castFunction.type().parameterArray();
         }
 
         for (int i = 0; i < numElements; i++) {
@@ -173,16 +187,16 @@ public final class ArrayJoin
             }
             else {
                 if (javaType == boolean.class) {
-                    sliceOutput.appendBytes(invokeCast(parameters, castFunctionHandle, session, elementType.getBoolean(arrayBlock, i)));
+                    sliceOutput.appendBytes(invokeCast(parameters, castFunction, session, elementType.getBoolean(arrayBlock, i)));
                 }
                 else if (javaType == double.class) {
-                    sliceOutput.appendBytes(invokeCast(parameters, castFunctionHandle, session, elementType.getDouble(arrayBlock, i)));
+                    sliceOutput.appendBytes(invokeCast(parameters, castFunction, session, elementType.getDouble(arrayBlock, i)));
                 }
                 else if (javaType == long.class) {
-                    sliceOutput.appendBytes(invokeCast(parameters, castFunctionHandle, session, elementType.getLong(arrayBlock, i)));
+                    sliceOutput.appendBytes(invokeCast(parameters, castFunction, session, elementType.getLong(arrayBlock, i)));
                 }
                 else if (javaType == Slice.class) {
-                    sliceOutput.appendBytes(invokeCast(parameters, castFunctionHandle, session, elementType.getSlice(arrayBlock, i)));
+                    sliceOutput.appendBytes(invokeCast(parameters, castFunction, session, elementType.getSlice(arrayBlock, i)));
                 }
                 else {
                     throw new PrestoException(INVALID_FUNCTION_ARGUMENT, format("Unexpected type %s", javaType.getName()));

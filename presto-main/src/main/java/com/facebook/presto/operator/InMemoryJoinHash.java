@@ -15,21 +15,19 @@ package com.facebook.presto.operator;
 
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
-import com.facebook.presto.spi.block.Block;
 import com.google.common.primitives.Ints;
 import io.airlift.slice.XxHash64;
 import it.unimi.dsi.fastutil.HashCommon;
-import it.unimi.dsi.fastutil.longs.AbstractLongIterator;
 import it.unimi.dsi.fastutil.longs.LongArrayList;
-import it.unimi.dsi.fastutil.longs.LongIterator;
 
 import java.util.Arrays;
 
 import static com.facebook.presto.operator.SyntheticAddress.decodePosition;
 import static com.facebook.presto.operator.SyntheticAddress.decodeSliceIndex;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static io.airlift.slice.SizeOf.sizeOf;
 import static io.airlift.slice.SizeOf.sizeOfBooleanArray;
 import static io.airlift.slice.SizeOf.sizeOfIntArray;
+import static java.util.Objects.requireNonNull;
 
 // This implementation assumes arrays used in the hash are always a power of 2
 public final class InMemoryJoinHash
@@ -41,23 +39,22 @@ public final class InMemoryJoinHash
     private final int channelCount;
     private final int mask;
     private final int[] key;
-    private final boolean[] keyVisited;
     private final int[] positionLinks;
     private final long size;
 
     public InMemoryJoinHash(LongArrayList addresses, PagesHashStrategy pagesHashStrategy)
     {
-        this.addresses = checkNotNull(addresses, "addresses is null");
-        this.pagesHashStrategy = checkNotNull(pagesHashStrategy, "pagesHashStrategy is null");
+        this.addresses = requireNonNull(addresses, "addresses is null");
+        this.pagesHashStrategy = requireNonNull(pagesHashStrategy, "pagesHashStrategy is null");
         this.channelCount = pagesHashStrategy.getChannelCount();
 
         // reserve memory for the arrays
         int hashSize = HashCommon.arraySize(addresses.size(), 0.75f);
-        size = sizeOfIntArray(hashSize) + sizeOfBooleanArray(hashSize) + sizeOfIntArray(addresses.size());
+        size = sizeOfIntArray(hashSize) + sizeOfBooleanArray(hashSize) + sizeOfIntArray(addresses.size())
+                +  sizeOf(addresses.elements()) + pagesHashStrategy.getSizeInBytes();
 
         mask = hashSize - 1;
         key = new int[hashSize];
-        keyVisited = new boolean[hashSize];
         Arrays.fill(key, -1);
 
         this.positionLinks = new int[addresses.size()];
@@ -65,7 +62,7 @@ public final class InMemoryJoinHash
 
         // index pages
         for (int position = 0; position < addresses.size(); position++) {
-            int pos = getHashPosition(hashPosition(position), mask);
+            int pos = (int) getHashPosition(hashPosition(position), mask);
 
             // look for an empty slot or a slot containing this key
             while (key[pos] != -1) {
@@ -93,6 +90,12 @@ public final class InMemoryJoinHash
     }
 
     @Override
+    public int getJoinPositionCount()
+    {
+        return positionLinks.length;
+    }
+
+    @Override
     public long getInMemorySizeInBytes()
     {
         return size;
@@ -101,17 +104,16 @@ public final class InMemoryJoinHash
     @Override
     public long getJoinPosition(int position, Page page)
     {
-        return getJoinPosition(position, page, pagesHashStrategy.hashRow(position, page.getBlocks()));
+        return getJoinPosition(position, page, pagesHashStrategy.hashRow(position, page));
     }
 
     @Override
-    public long getJoinPosition(int position, Page page, int rawHash)
+    public long getJoinPosition(int position, Page page, long rawHash)
     {
-        int pos = getHashPosition(rawHash, mask);
+        int pos = (int) getHashPosition(rawHash, mask);
 
         while (key[pos] != -1) {
-            if (positionEqualsCurrentRow(key[pos], position, page.getBlocks())) {
-                keyVisited[pos] = true;
+            if (positionEqualsCurrentRow(key[pos], position, page)) {
                 return key[pos];
             }
             // increment position and mask to handler wrap around
@@ -124,56 +126,6 @@ public final class InMemoryJoinHash
     public final long getNextJoinPosition(long currentPosition)
     {
         return positionLinks[Ints.checkedCast(currentPosition)];
-    }
-
-    @Override
-    public LongIterator getUnvisitedJoinPositions()
-    {
-        return new UnvisitedJoinPositionIterator();
-    }
-
-    public class UnvisitedJoinPositionIterator extends AbstractLongIterator
-    {
-        private int nextKeyId = 0;
-        private long nextJoinPosition = -1;
-
-        private UnvisitedJoinPositionIterator()
-        {
-            findUnvisitedKeyId();
-        }
-
-        @Override
-        public long nextLong()
-        {
-            long result = nextJoinPosition;
-
-            nextJoinPosition = getNextJoinPosition(nextJoinPosition);
-            if (nextJoinPosition < 0) {
-                nextKeyId++;
-                findUnvisitedKeyId();
-            }
-
-            return result;
-        }
-
-        @Override
-        public boolean hasNext()
-        {
-            return nextKeyId < keyVisited.length;
-        }
-
-        private void findUnvisitedKeyId()
-        {
-            while (nextKeyId < keyVisited.length) {
-                if (key[nextKeyId] != -1 && !keyVisited[nextKeyId]) {
-                    break;
-                }
-                nextKeyId++;
-            }
-            if (nextKeyId < keyVisited.length) {
-                nextJoinPosition = key[nextKeyId];
-            }
-        }
     }
 
     @Override
@@ -191,7 +143,7 @@ public final class InMemoryJoinHash
     {
     }
 
-    private int hashPosition(int position)
+    private long hashPosition(int position)
     {
         long pageAddress = addresses.getLong(position);
         int blockIndex = decodeSliceIndex(pageAddress);
@@ -200,13 +152,13 @@ public final class InMemoryJoinHash
         return pagesHashStrategy.hashPosition(blockIndex, blockPosition);
     }
 
-    private boolean positionEqualsCurrentRow(int leftPosition, int rightPosition, Block... rightBlocks)
+    private boolean positionEqualsCurrentRow(int leftPosition, int rightPosition, Page rightPage)
     {
         long pageAddress = addresses.getLong(leftPosition);
         int blockIndex = decodeSliceIndex(pageAddress);
         int blockPosition = decodePosition(pageAddress);
 
-        return pagesHashStrategy.positionEqualsRow(blockIndex, blockPosition, rightPosition, rightBlocks);
+        return pagesHashStrategy.positionEqualsRow(blockIndex, blockPosition, rightPosition, rightPage);
     }
 
     private boolean positionEqualsPosition(int leftPosition, int rightPosition)
@@ -222,8 +174,8 @@ public final class InMemoryJoinHash
         return pagesHashStrategy.positionEqualsPosition(leftBlockIndex, leftBlockPosition, rightBlockIndex, rightBlockPosition);
     }
 
-    private static int getHashPosition(int rawHash, int mask)
+    private static long getHashPosition(long rawHash, long mask)
     {
-        return ((int) XxHash64.hash(rawHash)) & mask;
+        return (XxHash64.hash(rawHash)) & mask;
     }
 }

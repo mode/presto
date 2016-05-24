@@ -13,119 +13,81 @@
  */
 package com.facebook.presto.operator.scalar;
 
-import com.facebook.presto.metadata.FunctionInfo;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.ParametricScalar;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.operator.Description;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.VariableWidthBlockBuilder;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.spi.type.TypeSignature;
+import com.facebook.presto.type.SqlType;
 import com.google.common.base.Throwables;
-import com.google.common.collect.ImmutableList;
-import io.airlift.slice.Slice;
 
 import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 import static com.facebook.presto.metadata.OperatorType.EQUAL;
-import static com.facebook.presto.metadata.Signature.comparableTypeParameter;
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
-import static com.facebook.presto.type.TypeUtils.buildStructuralSlice;
-import static com.facebook.presto.type.TypeUtils.castValue;
-import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
-import static com.facebook.presto.type.TypeUtils.readStructuralBlock;
-import static com.facebook.presto.util.Reflection.methodHandle;
-import static com.google.common.base.Preconditions.checkArgument;
-import static java.lang.String.format;
+import static com.facebook.presto.spi.type.TypeUtils.readNativeValue;
 
+@ScalarFunction("array_remove")
+@Description("Remove specified values from the given array")
 public final class ArrayRemoveFunction
-        extends ParametricScalar
 {
-    public static final ArrayRemoveFunction ARRAY_REMOVE_FUNCTION = new ArrayRemoveFunction();
-    private static final String FUNCTION_NAME = "array_remove";
-    private static final Signature SIGNATURE = new Signature(FUNCTION_NAME, ImmutableList.of(comparableTypeParameter("E")), "array<E>", ImmutableList.of("array<E>", "E"), false, false);
+    private ArrayRemoveFunction() {}
 
-    @Override
-    public Signature getSignature()
-    {
-        return SIGNATURE;
-    }
-
-    @Override
-    public boolean isHidden()
-    {
-        return false;
-    }
-
-    @Override
-    public boolean isDeterministic()
-    {
-        return true;
-    }
-
-    @Override
-    public String getDescription()
-    {
-        return "Remove specified values from the given array";
-    }
-
-    @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
-    {
-        checkArgument(types.size() == 1, format("%s expects only one argument", FUNCTION_NAME));
-        Type type = types.get("E");
-        TypeSignature valueType = type.getTypeSignature();
-        TypeSignature arrayType = parameterizedTypeName(StandardTypes.ARRAY, valueType);
-
-        MethodHandle equalsFunction = functionRegistry.resolveOperator(EQUAL, ImmutableList.of(type, type)).getMethodHandle();
-        MethodHandle baseMethodHandle = methodHandle(ArrayRemoveFunction.class, "remove", MethodHandle.class, Type.class, Slice.class, type.getJavaType());
-        MethodHandle methodHandle = baseMethodHandle.bindTo(equalsFunction).bindTo(type);
-        Signature signature = new Signature(FUNCTION_NAME, arrayType, arrayType, valueType);
-        return new FunctionInfo(signature, getDescription(), isHidden(), methodHandle, isDeterministic(), false, ImmutableList.of(false, false));
-    }
-
-    public static Slice remove(MethodHandle equalsFunction, Type type, Slice array, Slice value)
+    @TypeParameter("E")
+    @SqlType("array(E)")
+    public static Block remove(
+            @OperatorDependency(operator = EQUAL, returnType = StandardTypes.BOOLEAN, argumentTypes = {"E", "E"}) MethodHandle equalsFunction,
+            @TypeParameter("E") Type type,
+            @SqlType("array(E)") Block array,
+            @SqlType("E") long value)
     {
         return remove(equalsFunction, type, array, (Object) value);
     }
 
-    public static Slice remove(MethodHandle equalsFunction, Type type, Slice array, long value)
+    @TypeParameter("E")
+    @SqlType("array(E)")
+    public static Block remove(
+            @OperatorDependency(operator = EQUAL, returnType = StandardTypes.BOOLEAN, argumentTypes = {"E", "E"}) MethodHandle equalsFunction,
+            @TypeParameter("E") Type type,
+            @SqlType("array(E)") Block array,
+            @SqlType("E") double value)
     {
         return remove(equalsFunction, type, array, (Object) value);
     }
 
-    public static Slice remove(MethodHandle equalsFunction, Type type, Slice array, double value)
+    @TypeParameter("E")
+    @SqlType("array(E)")
+    public static Block remove(
+            @OperatorDependency(operator = EQUAL, returnType = StandardTypes.BOOLEAN, argumentTypes = {"E", "E"}) MethodHandle equalsFunction,
+            @TypeParameter("E") Type type,
+            @SqlType("array(E)") Block array,
+            @SqlType("E") boolean value)
     {
         return remove(equalsFunction, type, array, (Object) value);
     }
 
-    public static Slice remove(MethodHandle equalsFunction, Type type, Slice array, boolean value)
+    @TypeParameter("E")
+    @SqlType("array(E)")
+    public static Block remove(
+            @OperatorDependency(operator = EQUAL, returnType = StandardTypes.BOOLEAN, argumentTypes = {"E", "E"}) MethodHandle equalsFunction,
+            @TypeParameter("E") Type type,
+            @SqlType("array(E)") Block array,
+            @SqlType("E") Object value)
     {
-        return remove(equalsFunction, type, array, (Object) value);
-    }
-
-    private static Slice remove(MethodHandle equalsFunction, Type type, Slice array, Object value)
-    {
-        Block elementsBlock = readStructuralBlock(array);
-
         int sizeAfterRemove = 0;
         List<Integer> positions = new ArrayList<>();
 
-        for (int i = 0; i < elementsBlock.getPositionCount(); i++) {
-            Object element = castValue(type, elementsBlock, i);
+        for (int i = 0; i < array.getPositionCount(); i++) {
+            Object element = readNativeValue(type, array, i);
 
             try {
                 if (element == null || !(boolean) equalsFunction.invoke(element, value)) {
                     positions.add(i);
-                    sizeAfterRemove += elementsBlock.getLength(i);
+                    sizeAfterRemove += array.getLength(i);
                 }
             }
             catch (Throwable t) {
@@ -136,16 +98,20 @@ public final class ArrayRemoveFunction
             }
         }
 
-        if (elementsBlock.getPositionCount() == positions.size()) {
+        if (array.getPositionCount() == positions.size()) {
             return array;
         }
 
-        BlockBuilder blockBuilder = new VariableWidthBlockBuilder(new BlockBuilderStatus(), sizeAfterRemove);
+        int entrySize = 0;
+        if (!positions.isEmpty()) {
+            entrySize = (int) Math.ceil(sizeAfterRemove / (double) positions.size());
+        }
+        BlockBuilder blockBuilder = type.createBlockBuilder(new BlockBuilderStatus(), positions.size(), entrySize);
 
         for (int position : positions) {
-            type.appendTo(elementsBlock, position, blockBuilder);
+            type.appendTo(array, position, blockBuilder);
         }
 
-        return buildStructuralSlice(blockBuilder);
+        return blockBuilder.build();
     }
 }

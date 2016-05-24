@@ -17,12 +17,14 @@ import com.datastax.driver.core.Cluster.Builder;
 import com.datastax.driver.core.ColumnMetadata;
 import com.datastax.driver.core.DataType;
 import com.datastax.driver.core.Host;
+import com.datastax.driver.core.IndexMetadata;
 import com.datastax.driver.core.KeyspaceMetadata;
 import com.datastax.driver.core.ResultSet;
 import com.datastax.driver.core.ResultSetFuture;
 import com.datastax.driver.core.Row;
 import com.datastax.driver.core.Session;
 import com.datastax.driver.core.TableMetadata;
+import com.datastax.driver.core.VersionNumber;
 import com.datastax.driver.core.exceptions.NoHostAvailableException;
 import com.datastax.driver.core.querybuilder.Clause;
 import com.datastax.driver.core.querybuilder.QueryBuilder;
@@ -32,8 +34,8 @@ import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.SchemaNotFoundException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.TableNotFoundException;
-import com.facebook.presto.spi.TupleDomain;
-import com.google.common.base.Function;
+import com.facebook.presto.spi.predicate.NullableValue;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.google.common.base.Throwables;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
@@ -45,8 +47,6 @@ import com.google.common.collect.Ordering;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.airlift.json.JsonCodec;
 
-import javax.annotation.Nullable;
-
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -57,12 +57,12 @@ import java.util.Set;
 import java.util.concurrent.ExecutionException;
 
 import static com.datastax.driver.core.querybuilder.Select.Where;
-import static com.facebook.presto.cassandra.ExtraColumnMetadata.hiddenPredicate;
-import static com.facebook.presto.cassandra.ExtraColumnMetadata.nameGetter;
 import static com.google.common.base.Predicates.in;
 import static com.google.common.base.Predicates.not;
 import static com.google.common.collect.Iterables.filter;
 import static com.google.common.collect.Iterables.transform;
+import static java.util.Comparator.comparing;
+import static java.util.stream.Collectors.toList;
 
 public class CassandraSession
 {
@@ -220,8 +220,8 @@ public class CassandraSession
 
             // column ordering
             List<ExtraColumnMetadata> extras = extraColumnMetadataCodec.fromJson(columnOrderingString);
-            List<String> explicitColumnOrder = new ArrayList<>(ImmutableList.copyOf(transform(extras, nameGetter())));
-            hiddenColumns = ImmutableSet.copyOf(transform(filter(extras, hiddenPredicate()), nameGetter()));
+            List<String> explicitColumnOrder = new ArrayList<>(ImmutableList.copyOf(transform(extras, ExtraColumnMetadata::getName)));
+            hiddenColumns = ImmutableSet.copyOf(transform(filter(extras, ExtraColumnMetadata::isHidden), ExtraColumnMetadata::getName));
 
             // add columns not in the comment to the ordering
             Iterables.addAll(explicitColumnOrder, filter(columnNames, not(in(explicitColumnOrder))));
@@ -237,7 +237,7 @@ public class CassandraSession
         for (ColumnMetadata columnMeta : tableMeta.getPartitionKey()) {
             primaryKeySet.add(columnMeta.getName());
             boolean hidden = hiddenColumns.contains(columnMeta.getName());
-            CassandraColumnHandle columnHandle = buildColumnHandle(columnMeta, true, false, columnNames.indexOf(columnMeta.getName()), hidden);
+            CassandraColumnHandle columnHandle = buildColumnHandle(tableMeta, columnMeta, true, false, columnNames.indexOf(columnMeta.getName()), hidden);
             columnHandles.add(columnHandle);
         }
 
@@ -245,7 +245,7 @@ public class CassandraSession
         for (ColumnMetadata columnMeta : tableMeta.getClusteringColumns()) {
             primaryKeySet.add(columnMeta.getName());
             boolean hidden = hiddenColumns.contains(columnMeta.getName());
-            CassandraColumnHandle columnHandle = buildColumnHandle(columnMeta, false, true, columnNames.indexOf(columnMeta.getName()), hidden);
+            CassandraColumnHandle columnHandle = buildColumnHandle(tableMeta, columnMeta, false, true, columnNames.indexOf(columnMeta.getName()), hidden);
             columnHandles.add(columnHandle);
         }
 
@@ -253,20 +253,14 @@ public class CassandraSession
         for (ColumnMetadata columnMeta : tableMeta.getColumns()) {
             if (!primaryKeySet.contains(columnMeta.getName())) {
                 boolean hidden = hiddenColumns.contains(columnMeta.getName());
-                CassandraColumnHandle columnHandle = buildColumnHandle(columnMeta, false, false, columnNames.indexOf(columnMeta.getName()), hidden);
+                CassandraColumnHandle columnHandle = buildColumnHandle(tableMeta, columnMeta, false, false, columnNames.indexOf(columnMeta.getName()), hidden);
                 columnHandles.add(columnHandle);
             }
         }
 
-        List<CassandraColumnHandle> sortedColumnHandles = Ordering.natural().onResultOf(new Function<CassandraColumnHandle, Integer>()
-        {
-            @Nullable
-            @Override
-            public Integer apply(CassandraColumnHandle columnHandle)
-            {
-                return columnHandle.getOrdinalPosition();
-            }
-        }).sortedCopy(columnHandles.build());
+        List<CassandraColumnHandle> sortedColumnHandles = columnHandles.build().stream()
+                .sorted(comparing(CassandraColumnHandle::getOrdinalPosition))
+                .collect(toList());
 
         CassandraTableHandle tableHandle = new CassandraTableHandle(connectorId, tableMeta.getKeyspace().getName(), tableMeta.getName());
         return new CassandraTable(tableHandle, sortedColumnHandles);
@@ -291,7 +285,7 @@ public class CassandraSession
         throw new TableNotFoundException(schemaTableName);
     }
 
-    private CassandraColumnHandle buildColumnHandle(ColumnMetadata columnMeta, boolean partitionKey, boolean clusteringKey, int ordinalPosition, boolean hidden)
+    private CassandraColumnHandle buildColumnHandle(TableMetadata tableMetadata, ColumnMetadata columnMeta, boolean partitionKey, boolean clusteringKey, int ordinalPosition, boolean hidden)
     {
         CassandraType cassandraType = CassandraType.getCassandraType(columnMeta.getType().getName());
         List<CassandraType> typeArguments = null;
@@ -308,11 +302,17 @@ public class CassandraSession
                     throw new IllegalArgumentException("Invalid type arguments: " + typeArgs);
             }
         }
-        boolean indexed = columnMeta.getIndex() != null;
+        boolean indexed = false;
+        for (IndexMetadata idx : tableMetadata.getIndexes()) {
+            if (idx.getTarget().equals(columnMeta.getName())) {
+                indexed = true;
+                break;
+            }
+        }
         return new CassandraColumnHandle(connectorId, columnMeta.getName(), ordinalPosition, cassandraType, typeArguments, partitionKey, clusteringKey, indexed, hidden);
     }
 
-    public List<CassandraPartition> getPartitions(CassandraTable table, List<Comparable<?>> filterPrefix)
+    public List<CassandraPartition> getPartitions(CassandraTable table, List<Object> filterPrefix)
     {
         Iterable<Row> rows = queryPartitionKeys(table, filterPrefix);
         if (rows == null) {
@@ -323,7 +323,7 @@ public class CassandraSession
         List<CassandraColumnHandle> partitionKeyColumns = table.getPartitionKeyColumns();
 
         ByteBuffer buffer = ByteBuffer.allocate(1000);
-        HashMap<ColumnHandle, Comparable<?>> map = new HashMap<>();
+        HashMap<ColumnHandle, NullableValue> map = new HashMap<>();
         Set<String> uniquePartitionIds = new HashSet<>();
         StringBuilder stringBuilder = new StringBuilder();
 
@@ -347,7 +347,7 @@ public class CassandraSession
                     buffer.put(component);
                 }
                 CassandraColumnHandle columnHandle = partitionKeyColumns.get(i);
-                Comparable<?> keyPart = CassandraType.getColumnValueForPartitionKey(row, i, columnHandle.getCassandraType(), columnHandle.getTypeArguments());
+                NullableValue keyPart = CassandraType.getColumnValueForPartitionKey(row, i, columnHandle.getCassandraType(), columnHandle.getTypeArguments());
                 map.put(columnHandle, keyPart);
                 if (i > 0) {
                     stringBuilder.append(" AND ");
@@ -359,7 +359,7 @@ public class CassandraSession
             buffer.flip();
             byte[] key = new byte[buffer.limit()];
             buffer.get(key);
-            TupleDomain<ColumnHandle> tupleDomain = TupleDomain.withFixedValues(map);
+            TupleDomain<ColumnHandle> tupleDomain = TupleDomain.fromFixedValues(map);
             String partitionId = stringBuilder.toString();
             if (uniquePartitionIds.add(partitionId)) {
                 partitions.add(new CassandraPartition(key, partitionId, tupleDomain, false));
@@ -368,7 +368,7 @@ public class CassandraSession
         return partitions.build();
     }
 
-    protected Iterable<Row> queryPartitionKeys(CassandraTable table, List<Comparable<?>> filterPrefix)
+    protected Iterable<Row> queryPartitionKeys(CassandraTable table, List<Object> filterPrefix)
     {
         CassandraTableHandle tableHandle = table.getTableHandle();
         String schemaName = tableHandle.getSchemaName();
@@ -397,8 +397,20 @@ public class CassandraSession
         partitionKeys.setFetchSize(fetchSizeForPartitionKeySelect);
 
         if (!fullPartitionKey) {
-            addWhereClause(partitionKeys.where(), partitionKeyColumns, new ArrayList<Comparable<?>>());
-            ResultSetFuture partitionKeyFuture =  executeWithSession(schemaName, new SessionCallable<ResultSetFuture>() {
+            Set<Host> clusterHosts = getSession(schemaName).getCluster().getMetadata().getAllHosts();
+            if (!clusterHosts.isEmpty()) {
+                VersionNumber version = clusterHosts.iterator().next().getCassandraVersion();
+                // Cassandra 2.2 changes the functionality of COUNT(*) to be
+                // more like SQL standard. COUNT(*) can no longer
+                // be used to see if a table has < limitForPartitionKeySelect partitions.
+                // See CASSANDRA-8216
+                if (version.getMajor() >= 3 || (version.getMajor() == 2 && version.getMinor() >= 2)) {
+                    return null;
+                }
+            }
+
+            addWhereClause(partitionKeys.where(), partitionKeyColumns, new ArrayList<>());
+            ResultSetFuture partitionKeyFuture = executeWithSession(schemaName, new SessionCallable<ResultSetFuture>() {
                 @Override
                 public ResultSetFuture executeWithSession(Session session)
                 {
@@ -452,7 +464,7 @@ public class CassandraSession
         T executeWithSession(Session session);
     }
 
-    private static void addWhereClause(Where where, List<CassandraColumnHandle> partitionKeyColumns, List<Comparable<?>> filterPrefix)
+    private static void addWhereClause(Where where, List<CassandraColumnHandle> partitionKeyColumns, List<Object> filterPrefix)
     {
         for (int i = 0; i < filterPrefix.size(); i++) {
             CassandraColumnHandle column = partitionKeyColumns.get(i);

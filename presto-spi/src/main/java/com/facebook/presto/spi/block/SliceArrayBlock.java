@@ -16,20 +16,31 @@ package com.facebook.presto.spi.block;
 import io.airlift.slice.SizeOf;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
+import org.openjdk.jol.info.ClassLayout;
 
 import java.util.Arrays;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
+
+import static com.facebook.presto.spi.block.BlockValidationUtil.checkValidPositions;
 
 public class SliceArrayBlock
         extends AbstractVariableWidthBlock
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(SliceArrayBlock.class).instanceSize();
+
     private final int positionCount;
     private final Slice[] values;
     private final int sizeInBytes;
     private final int retainedSizeInBytes;
 
     public SliceArrayBlock(int positionCount, Slice[] values)
+    {
+        this(positionCount, values, false);
+    }
+
+    public SliceArrayBlock(int positionCount, Slice[] values, boolean valueSlicesAreDistinct)
     {
         this.positionCount = positionCount;
 
@@ -39,10 +50,12 @@ public class SliceArrayBlock
         this.values = values;
 
         sizeInBytes = getSliceArraySizeInBytes(values);
-        retainedSizeInBytes = getSliceArrayRetainedSizeInBytes(values);
+
+        // if values are distinct, use the already computed value
+        retainedSizeInBytes = INSTANCE_SIZE + (valueSlicesAreDistinct ? sizeInBytes : getSliceArrayRetainedSizeInBytes(values));
     }
 
-    Slice[] getValues()
+    public Slice[] getValues()
     {
         return values;
     }
@@ -69,6 +82,20 @@ public class SliceArrayBlock
     public BlockEncoding getEncoding()
     {
         return new SliceArrayBlockEncoding();
+    }
+
+    @Override
+    public Block copyPositions(List<Integer> positions)
+    {
+        checkValidPositions(positions, positionCount);
+
+        Slice[] newValues = new Slice[positions.size()];
+        for (int i = 0; i < positions.size(); i++) {
+            if (!isEntryNull(positions.get(i))) {
+                newValues[i] = Slices.copyOf(values[positions.get(i)]);
+            }
+        }
+        return new SliceArrayBlock(positions.size(), newValues);
     }
 
     @Override
@@ -147,7 +174,7 @@ public class SliceArrayBlock
         return sb.toString();
     }
 
-    static int getSliceArraySizeInBytes(Slice[] values)
+    public static int getSliceArraySizeInBytes(Slice[] values)
     {
         long sizeInBytes = SizeOf.sizeOf(values);
         for (Slice value : values) {
@@ -164,7 +191,7 @@ public class SliceArrayBlock
     static int getSliceArrayRetainedSizeInBytes(Slice[] values)
     {
         long sizeInBytes = SizeOf.sizeOf(values);
-        Map<Object, Boolean> uniqueRetained = new IdentityHashMap<>();
+        Map<Object, Boolean> uniqueRetained = new IdentityHashMap<>(values.length);
         for (Slice value : values) {
             if (value != null && value.getBase() != null && uniqueRetained.put(value.getBase(), true) == null) {
                 sizeInBytes += value.getRetainedSize();

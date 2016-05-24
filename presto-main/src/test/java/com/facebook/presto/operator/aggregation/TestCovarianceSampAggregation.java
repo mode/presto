@@ -17,12 +17,11 @@ import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.google.common.collect.ImmutableList;
 import org.apache.commons.math3.stat.correlation.Covariance;
-import org.testng.Assert;
 
 import java.util.List;
 
+import static com.facebook.presto.block.BlockAssertions.createDoubleSequenceBlock;
 import static com.facebook.presto.operator.aggregation.AggregationTestUtils.constructDoublePrimitiveArray;
-import static com.facebook.presto.operator.aggregation.AggregationTestUtils.createDoubleSequenceBlock;
 
 public class TestCovarianceSampAggregation
         extends AbstractTestAggregationFunction
@@ -30,7 +29,7 @@ public class TestCovarianceSampAggregation
     @Override
     public Block[] getSequenceBlocks(int start, int length)
     {
-        return new Block[]{createDoubleSequenceBlock(start, length), createDoubleSequenceBlock(start + 5, length)};
+        return new Block[]{createDoubleSequenceBlock(start, start + length), createDoubleSequenceBlock(start + 5, start + 5 + length)};
     }
 
     @Override
@@ -51,22 +50,6 @@ public class TestCovarianceSampAggregation
         if (length <= 1) {
             return null;
         }
-        Covariance covariance = new Covariance();
-        final double expected = covariance.covariance(constructDoublePrimitiveArray(start + 5, length), constructDoublePrimitiveArray(start, length), true);
-        return new Object() {
-            @Override
-            public boolean equals(Object obj)
-            {
-                Assert.assertEquals(expected, (Double) obj, 1e-10);
-                return true;
-            }
-
-            @Override
-            public int hashCode()
-            {
-                // required by checkstyle
-                return super.hashCode();
-            }
-        };
+        return new Covariance().covariance(constructDoublePrimitiveArray(start + 5, length), constructDoublePrimitiveArray(start, length), true);
     }
 }

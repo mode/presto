@@ -17,14 +17,15 @@ import com.facebook.presto.spi.ConnectorTableHandle;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
-import javax.annotation.Nullable;
-
 import java.util.Objects;
+import java.util.Optional;
+import java.util.OptionalInt;
+import java.util.OptionalLong;
 
 import static com.facebook.presto.raptor.util.MetadataUtil.checkSchemaName;
 import static com.facebook.presto.raptor.util.MetadataUtil.checkTableName;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public final class RaptorTableHandle
         implements ConnectorTableHandle
@@ -33,8 +34,11 @@ public final class RaptorTableHandle
     private final String schemaName;
     private final String tableName;
     private final long tableId;
-    @Nullable
-    private final RaptorColumnHandle sampleWeightColumnHandle;
+    private final OptionalLong distributionId;
+    private final OptionalInt bucketCount;
+    private final OptionalLong transactionId;
+    private final Optional<RaptorColumnHandle> sampleWeightColumnHandle;
+    private final boolean delete;
 
     @JsonCreator
     public RaptorTableHandle(
@@ -42,16 +46,25 @@ public final class RaptorTableHandle
             @JsonProperty("schemaName") String schemaName,
             @JsonProperty("tableName") String tableName,
             @JsonProperty("tableId") long tableId,
-            @JsonProperty("sampleWeightColumnHandle") @Nullable RaptorColumnHandle sampleWeightColumnHandle)
+            @JsonProperty("distributionId") OptionalLong distributionId,
+            @JsonProperty("bucketCount") OptionalInt bucketCount,
+            @JsonProperty("transactionId") OptionalLong transactionId,
+            @JsonProperty("sampleWeightColumnHandle") Optional<RaptorColumnHandle> sampleWeightColumnHandle,
+            @JsonProperty("delete") boolean delete)
     {
-        this.connectorId = checkNotNull(connectorId, "connectorId is null");
+        this.connectorId = requireNonNull(connectorId, "connectorId is null");
         this.schemaName = checkSchemaName(schemaName);
         this.tableName = checkTableName(tableName);
 
         checkArgument(tableId > 0, "tableId must be greater than zero");
         this.tableId = tableId;
 
-        this.sampleWeightColumnHandle = sampleWeightColumnHandle;
+        this.sampleWeightColumnHandle = requireNonNull(sampleWeightColumnHandle, "sampleWeightColumnHandle is null");
+        this.distributionId = requireNonNull(distributionId, "distributionId is null");
+        this.bucketCount = requireNonNull(bucketCount, "bucketCount is null");
+        this.transactionId = requireNonNull(transactionId, "transactionId is null");
+
+        this.delete = delete;
     }
 
     @JsonProperty
@@ -78,11 +91,34 @@ public final class RaptorTableHandle
         return tableId;
     }
 
-    @Nullable
     @JsonProperty
-    public RaptorColumnHandle getSampleWeightColumnHandle()
+    public OptionalLong getDistributionId()
+    {
+        return distributionId;
+    }
+
+    @JsonProperty
+    public OptionalInt getBucketCount()
+    {
+        return bucketCount;
+    }
+
+    @JsonProperty
+    public OptionalLong getTransactionId()
+    {
+        return transactionId;
+    }
+
+    @JsonProperty
+    public Optional<RaptorColumnHandle> getSampleWeightColumnHandle()
     {
         return sampleWeightColumnHandle;
+    }
+
+    @JsonProperty
+    public boolean isDelete()
+    {
+        return delete;
     }
 
     @Override

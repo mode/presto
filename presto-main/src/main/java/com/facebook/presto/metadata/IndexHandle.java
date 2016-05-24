@@ -14,31 +14,41 @@
 package com.facebook.presto.metadata;
 
 import com.facebook.presto.spi.ConnectorIndexHandle;
+import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public final class IndexHandle
 {
     private final String connectorId;
+    private final ConnectorTransactionHandle transactionHandle;
     private final ConnectorIndexHandle connectorHandle;
 
     @JsonCreator
     public IndexHandle(
             @JsonProperty("connectorId") String connectorId,
+            @JsonProperty("transactionHandle") ConnectorTransactionHandle transactionHandle,
             @JsonProperty("connectorHandle") ConnectorIndexHandle connectorHandle)
     {
-        this.connectorId = checkNotNull(connectorId, "connectorId is null");
-        this.connectorHandle = checkNotNull(connectorHandle, "connectorHandle is null");
+        this.connectorId = requireNonNull(connectorId, "connectorId is null");
+        this.transactionHandle = requireNonNull(transactionHandle, "transactionHandle is null");
+        this.connectorHandle = requireNonNull(connectorHandle, "connectorHandle is null");
     }
 
     @JsonProperty
     public String getConnectorId()
     {
         return connectorId;
+    }
+
+    @JsonProperty
+    public ConnectorTransactionHandle getTransactionHandle()
+    {
+        return transactionHandle;
     }
 
     @JsonProperty
@@ -50,7 +60,7 @@ public final class IndexHandle
     @Override
     public int hashCode()
     {
-        return Objects.hash(connectorId, connectorHandle);
+        return Objects.hash(connectorId, transactionHandle, connectorHandle);
     }
 
     @Override
@@ -64,12 +74,13 @@ public final class IndexHandle
         }
         final IndexHandle other = (IndexHandle) obj;
         return Objects.equals(this.connectorId, other.connectorId) &&
+                Objects.equals(this.transactionHandle, other.transactionHandle) &&
                 Objects.equals(this.connectorHandle, other.connectorHandle);
     }
 
     @Override
     public String toString()
     {
-        return connectorId + ":" + connectorHandle;
+        return connectorId + ":" + transactionHandle + ":" + connectorHandle;
     }
 }

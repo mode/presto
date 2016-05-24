@@ -32,8 +32,8 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static io.airlift.json.JsonCodec.jsonCodec;
+import static java.util.Objects.requireNonNull;
 
 public class QueryRunner
         implements Closeable
@@ -53,12 +53,12 @@ public class QueryRunner
             boolean authenticationEnabled,
             KerberosConfig kerberosConfig)
     {
-        this.session = new AtomicReference<>(checkNotNull(session, "session is null"));
-        this.queryResultsCodec = checkNotNull(queryResultsCodec, "queryResultsCodec is null");
+        this.session = new AtomicReference<>(requireNonNull(session, "session is null"));
+        this.queryResultsCodec = requireNonNull(queryResultsCodec, "queryResultsCodec is null");
         this.httpClient = new JettyHttpClient(
                 getHttpClientConfig(socksProxy, keystorePath, keystorePassword, kerberosPrincipal, kerberosRemoteServiceName, authenticationEnabled),
                 kerberosConfig,
-                com.google.common.base.Optional.<JettyIoPool>absent(),
+                Optional.<JettyIoPool>empty(),
                 ImmutableList.<HttpRequestFilter>of());
     }
 
@@ -67,14 +67,9 @@ public class QueryRunner
         return session.get();
     }
 
-    public HttpClient getHttpClient()
-    {
-        return httpClient;
-    }
-
     public void setSession(ClientSession session)
     {
-        this.session.set(checkNotNull(session, "session is null"));
+        this.session.set(requireNonNull(session, "session is null"));
     }
 
     public Query startQuery(String query)
@@ -123,7 +118,9 @@ public class QueryRunner
             Optional<String> kerberosRemoteServiceName,
             boolean authenticationEnabled)
     {
-        HttpClientConfig httpClientConfig = new HttpClientConfig().setConnectTimeout(new Duration(10, TimeUnit.SECONDS));
+        HttpClientConfig httpClientConfig = new HttpClientConfig()
+                .setConnectTimeout(new Duration(5, TimeUnit.SECONDS))
+                .setRequestTimeout(new Duration(5, TimeUnit.SECONDS));
 
         socksProxy.ifPresent(httpClientConfig::setSocksProxy);
 

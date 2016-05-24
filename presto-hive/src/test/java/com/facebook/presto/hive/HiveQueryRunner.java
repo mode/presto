@@ -15,23 +15,24 @@ package com.facebook.presto.hive;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.hive.metastore.InMemoryHiveMetastore;
-import com.facebook.presto.testing.QueryRunner;
 import com.facebook.presto.tests.DistributedQueryRunner;
 import com.facebook.presto.tpch.TpchPlugin;
 import com.facebook.presto.tpch.testing.SampledTpchPlugin;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import io.airlift.log.Logger;
+import io.airlift.log.Logging;
 import io.airlift.tpch.TpchTable;
 import org.apache.hadoop.hive.metastore.api.Database;
+import org.apache.hadoop.hive.metastore.api.PrincipalType;
 import org.joda.time.DateTimeZone;
 
 import java.io.File;
 import java.util.Map;
 
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
+import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.facebook.presto.tests.QueryAssertions.copyTpchTables;
 import static com.facebook.presto.tpch.TpchMetadata.TINY_SCHEMA_NAME;
-import static java.util.Locale.ENGLISH;
 import static org.testng.Assert.assertEquals;
 
 public final class HiveQueryRunner
@@ -40,22 +41,29 @@ public final class HiveQueryRunner
     {
     }
 
-    private static final String TPCH_SCHEMA = "tpch";
+    public static final String HIVE_CATALOG = "hive";
+    public static final String TPCH_SCHEMA = "tpch";
     private static final String TPCH_SAMPLED_SCHEMA = "tpch_sampled";
     private static final DateTimeZone TIME_ZONE = DateTimeZone.forID("Asia/Kathmandu");
 
-    public static QueryRunner createQueryRunner(TpchTable<?>... tables)
+    public static DistributedQueryRunner createQueryRunner(TpchTable<?>... tables)
             throws Exception
     {
         return createQueryRunner(ImmutableList.copyOf(tables));
     }
 
-    public static QueryRunner createQueryRunner(Iterable<TpchTable<?>> tables)
+    public static DistributedQueryRunner createQueryRunner(Iterable<TpchTable<?>> tables)
+            throws Exception
+    {
+        return createQueryRunner(tables, ImmutableMap.of());
+    }
+
+    public static DistributedQueryRunner createQueryRunner(Iterable<TpchTable<?>> tables, Map<String, String> extraProperties)
             throws Exception
     {
         assertEquals(DateTimeZone.getDefault(), TIME_ZONE, "Timezone not configured correctly. Add -Duser.timezone=Asia/Katmandu to your JVM arguments");
 
-        DistributedQueryRunner queryRunner = new DistributedQueryRunner(createSession(), 4);
+        DistributedQueryRunner queryRunner = new DistributedQueryRunner(createSession(), 4, extraProperties);
 
         try {
             queryRunner.installPlugin(new TpchPlugin());
@@ -64,19 +72,22 @@ public final class HiveQueryRunner
             queryRunner.installPlugin(new SampledTpchPlugin());
             queryRunner.createCatalog("tpch_sampled", "tpch_sampled");
 
-            File baseDir = queryRunner.getCoordinator().getBaseDataDir().toFile();
-            InMemoryHiveMetastore metastore = new InMemoryHiveMetastore();
-            metastore.createDatabase(new Database("tpch", null, new File(baseDir, "tpch").toURI().toString(), null));
-            metastore.createDatabase(new Database("tpch_sampled", null, new File(baseDir, "tpch_sampled").toURI().toString(), null));
+            File baseDir = queryRunner.getCoordinator().getBaseDataDir().resolve("hive_data").toFile();
+            InMemoryHiveMetastore metastore = new InMemoryHiveMetastore(baseDir);
+            metastore.createDatabase(createDatabaseMetastoreObject(baseDir, "tpch"));
+            metastore.createDatabase(createDatabaseMetastoreObject(baseDir, "tpch_sampled"));
 
-            queryRunner.installPlugin(new HivePlugin("hive", metastore));
+            queryRunner.installPlugin(new HivePlugin(HIVE_CATALOG, metastore));
             Map<String, String> hiveProperties = ImmutableMap.<String, String>builder()
                     .put("hive.metastore.uri", "thrift://localhost:8080")
+                    .put("hive.allow-add-column", "true")
                     .put("hive.allow-drop-table", "true")
                     .put("hive.allow-rename-table", "true")
+                    .put("hive.allow-rename-column", "true")
                     .put("hive.time-zone", TIME_ZONE.getID())
+                    .put("hive.security", "sql-standard")
                     .build();
-            queryRunner.createCatalog("hive", "hive", hiveProperties);
+            queryRunner.createCatalog(HIVE_CATALOG, HIVE_CATALOG, hiveProperties);
 
             copyTpchTables(queryRunner, "tpch", TINY_SCHEMA_NAME, createSession(), tables);
             copyTpchTables(queryRunner, "tpch_sampled", TINY_SCHEMA_NAME, createSampledSession(), tables);
@@ -87,6 +98,14 @@ public final class HiveQueryRunner
             queryRunner.close();
             throw e;
         }
+    }
+
+    private static Database createDatabaseMetastoreObject(File baseDir, String name)
+    {
+        Database database = new Database(name, null, new File(baseDir, name).toURI().toString(), null);
+        database.setOwnerName("public");
+        database.setOwnerType(PrincipalType.ROLE);
+        return database;
     }
 
     public static Session createSession()
@@ -101,13 +120,21 @@ public final class HiveQueryRunner
 
     private static Session createHiveSession(String schema)
     {
-        return Session.builder()
-                .setUser("user")
-                .setSource("test")
-                .setCatalog("hive")
+        return testSessionBuilder()
+                .setCatalog(HIVE_CATALOG)
                 .setSchema(schema)
-                .setTimeZoneKey(UTC_KEY)
-                .setLocale(ENGLISH)
                 .build();
+    }
+
+    public static void main(String[] args)
+            throws Exception
+    {
+        // You need to add "--user user" to your CLI for your queries to work
+        Logging.initialize();
+        DistributedQueryRunner queryRunner = createQueryRunner(TpchTable.getTables(), ImmutableMap.of("http-server.http.port", "8080"));
+        Thread.sleep(10);
+        Logger log = Logger.get(DistributedQueryRunner.class);
+        log.info("======== SERVER STARTED ========");
+        log.info("\n====\n%s\n====", queryRunner.getCoordinator().getBaseUrl());
     }
 }

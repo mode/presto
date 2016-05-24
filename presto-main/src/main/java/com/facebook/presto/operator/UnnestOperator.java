@@ -15,19 +15,20 @@ package com.facebook.presto.operator;
 
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.type.ArrayType;
 import com.facebook.presto.type.MapType;
 import com.google.common.collect.ImmutableList;
-import io.airlift.slice.Slice;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 public class UnnestOperator
         implements Operator
@@ -36,6 +37,7 @@ public class UnnestOperator
             implements OperatorFactory
     {
         private final int operatorId;
+        private final PlanNodeId planNodeId;
         private final List<Integer> replicateChannels;
         private final List<Type> replicateTypes;
         private final List<Integer> unnestChannels;
@@ -44,14 +46,15 @@ public class UnnestOperator
         private boolean closed;
         private final ImmutableList<Type> types;
 
-        public UnnestOperatorFactory(int operatorId, List<Integer> replicateChannels, List<Type> replicateTypes, List<Integer> unnestChannels, List<Type> unnestTypes, boolean withOrdinality)
+        public UnnestOperatorFactory(int operatorId, PlanNodeId planNodeId, List<Integer> replicateChannels, List<Type> replicateTypes, List<Integer> unnestChannels, List<Type> unnestTypes, boolean withOrdinality)
         {
             this.operatorId = operatorId;
-            this.replicateChannels = ImmutableList.copyOf(checkNotNull(replicateChannels, "replicateChannels is null"));
-            this.replicateTypes = ImmutableList.copyOf(checkNotNull(replicateTypes, "replicateTypes is null"));
+            this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
+            this.replicateChannels = ImmutableList.copyOf(requireNonNull(replicateChannels, "replicateChannels is null"));
+            this.replicateTypes = ImmutableList.copyOf(requireNonNull(replicateTypes, "replicateTypes is null"));
             checkArgument(replicateChannels.size() == replicateTypes.size(), "replicateChannels and replicateTypes do not match");
-            this.unnestChannels = ImmutableList.copyOf(checkNotNull(unnestChannels, "unnestChannels is null"));
-            this.unnestTypes = ImmutableList.copyOf(checkNotNull(unnestTypes, "unnestTypes is null"));
+            this.unnestChannels = ImmutableList.copyOf(requireNonNull(unnestChannels, "unnestChannels is null"));
+            this.unnestTypes = ImmutableList.copyOf(requireNonNull(unnestTypes, "unnestTypes is null"));
             checkArgument(unnestChannels.size() == unnestTypes.size(), "unnestChannels and unnestTypes do not match");
             this.withOrdinality = withOrdinality;
             ImmutableList.Builder<Type> typesBuilder = ImmutableList.<Type>builder()
@@ -73,7 +76,7 @@ public class UnnestOperator
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, UnnestOperator.class.getSimpleName());
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, UnnestOperator.class.getSimpleName());
             return new UnnestOperator(operatorContext, replicateChannels, replicateTypes, unnestChannels, unnestTypes, withOrdinality);
         }
 
@@ -81,6 +84,12 @@ public class UnnestOperator
         public void close()
         {
             closed = true;
+        }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new UnnestOperatorFactory(operatorId, planNodeId, replicateChannels, replicateTypes, unnestChannels, unnestTypes, withOrdinality);
         }
     }
 
@@ -100,11 +109,11 @@ public class UnnestOperator
 
     public UnnestOperator(OperatorContext operatorContext, List<Integer> replicateChannels, List<Type> replicateTypes, List<Integer> unnestChannels, List<Type> unnestTypes, boolean withOrdinality)
     {
-        this.operatorContext = checkNotNull(operatorContext, "operatorContext is null");
-        this.replicateChannels = ImmutableList.copyOf(checkNotNull(replicateChannels, "replicateChannels is null"));
-        this.replicateTypes = ImmutableList.copyOf(checkNotNull(replicateTypes, "replicateTypes is null"));
-        this.unnestChannels = ImmutableList.copyOf(checkNotNull(unnestChannels, "unnestChannels is null"));
-        this.unnestTypes = ImmutableList.copyOf(checkNotNull(unnestTypes, "unnestTypes is null"));
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
+        this.replicateChannels = ImmutableList.copyOf(requireNonNull(replicateChannels, "replicateChannels is null"));
+        this.replicateTypes = ImmutableList.copyOf(requireNonNull(replicateTypes, "replicateTypes is null"));
+        this.unnestChannels = ImmutableList.copyOf(requireNonNull(unnestChannels, "unnestChannels is null"));
+        this.unnestTypes = ImmutableList.copyOf(requireNonNull(unnestTypes, "unnestTypes is null"));
         this.withOrdinality = withOrdinality;
         checkArgument(replicateChannels.size() == replicateTypes.size(), "replicate channels or types has wrong size");
         checkArgument(unnestChannels.size() == unnestTypes.size(), "unnest channels or types has wrong size");
@@ -163,7 +172,7 @@ public class UnnestOperator
     public void addInput(Page page)
     {
         checkState(!finishing, "Operator is already finishing");
-        checkNotNull(page, "page is null");
+        requireNonNull(page, "page is null");
         checkState(currentPage == null, "currentPage is not null");
         checkState(!pageBuilder.isFull(), "Page buffer is full");
 
@@ -178,15 +187,15 @@ public class UnnestOperator
         for (int i = 0; i < unnestTypes.size(); i++) {
             Type type = unnestTypes.get(i);
             int channel = unnestChannels.get(i);
-            Slice slice = null;
+            Block block = null;
             if (!currentPage.getBlock(channel).isNull(currentPosition)) {
-                slice = type.getSlice(currentPage.getBlock(channel), currentPosition);
+                block = (Block) type.getObject(currentPage.getBlock(channel), currentPosition);
             }
             if (type instanceof ArrayType) {
-                unnesters.add(new ArrayUnnester((ArrayType) type, slice));
+                unnesters.add(new ArrayUnnester((ArrayType) type, block));
             }
             else if (type instanceof MapType) {
-                unnesters.add(new MapUnnester((MapType) type, slice));
+                unnesters.add(new MapUnnester((MapType) type, block));
             }
             else {
                 throw new IllegalArgumentException("Cannot unnest type: " + type);

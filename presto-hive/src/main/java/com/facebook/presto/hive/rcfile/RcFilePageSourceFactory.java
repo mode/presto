@@ -13,13 +13,13 @@
  */
 package com.facebook.presto.hive.rcfile;
 
-import com.facebook.presto.hive.HiveClientConfig;
+import com.facebook.presto.hive.HdfsEnvironment;
 import com.facebook.presto.hive.HiveColumnHandle;
 import com.facebook.presto.hive.HivePageSourceFactory;
 import com.facebook.presto.hive.HivePartitionKey;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.ConnectorSession;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
@@ -37,36 +37,24 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Properties;
 
-import static com.facebook.presto.hive.HiveSessionProperties.isOptimizedReaderEnabled;
 import static com.facebook.presto.hive.HiveUtil.getDeserializerClassName;
 import static com.facebook.presto.hive.HiveUtil.setReadColumns;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Predicates.not;
 import static com.google.common.collect.Iterables.filter;
 import static com.google.common.collect.Lists.transform;
+import static java.util.Objects.requireNonNull;
 
 public class RcFilePageSourceFactory
         implements HivePageSourceFactory
 {
     private final TypeManager typeManager;
-    private final boolean enabled;
+    private final HdfsEnvironment hdfsEnvironment;
 
     @Inject
-    public RcFilePageSourceFactory(TypeManager typeManager, HiveClientConfig config)
+    public RcFilePageSourceFactory(TypeManager typeManager, HdfsEnvironment hdfsEnvironment)
     {
-        //noinspection deprecation
-        this(typeManager, config.isOptimizedReaderEnabled());
-    }
-
-    public RcFilePageSourceFactory(TypeManager typeManager)
-    {
-        this(typeManager, true);
-    }
-
-    public RcFilePageSourceFactory(TypeManager typeManager, boolean enabled)
-    {
-        this.typeManager = checkNotNull(typeManager, "typeManager is null");
-        this.enabled = enabled;
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
+        this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
     }
 
     @Override
@@ -83,7 +71,7 @@ public class RcFilePageSourceFactory
             DateTimeZone hiveStorageTimeZone)
     {
         // todo remove this when GC issues are resolved
-        if (true || !isOptimizedReaderEnabled(session, enabled)) {
+        if (true) {
             return Optional.empty();
         }
 
@@ -116,7 +104,7 @@ public class RcFilePageSourceFactory
 
         RCFile.Reader recordReader;
         try {
-            FileSystem fileSystem = path.getFileSystem(configuration);
+            FileSystem fileSystem = hdfsEnvironment.getFileSystem(session.getUser(), path, configuration);
             recordReader = new RCFile.Reader(fileSystem, path, configuration);
         }
         catch (Exception e) {

@@ -13,8 +13,11 @@
  */
 package com.facebook.presto.sql.planner;
 
+import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.tree.DefaultExpressionTraversalVisitor;
+import com.facebook.presto.sql.tree.DereferenceExpression;
 import com.facebook.presto.sql.tree.Expression;
+import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -22,10 +25,20 @@ import com.google.common.collect.ImmutableSet;
 import java.util.List;
 import java.util.Set;
 
-// TODO: a similar class exists in (TupleAnalyzer.DependencyExtractor)
+import static com.facebook.presto.sql.planner.ExpressionExtractor.extractExpressions;
+import static java.util.Objects.requireNonNull;
+
 public final class DependencyExtractor
 {
     private DependencyExtractor() {}
+
+    public static Set<Symbol> extractUnique(PlanNode node)
+    {
+        ImmutableSet.Builder<Symbol> uniqueSymbols = ImmutableSet.builder();
+        extractExpressions(node).forEach(expression -> uniqueSymbols.addAll(extractUnique(expression)));
+
+        return uniqueSymbols.build();
+    }
 
     public static Set<Symbol> extractUnique(Expression expression)
     {
@@ -44,17 +57,55 @@ public final class DependencyExtractor
     public static List<Symbol> extractAll(Expression expression)
     {
         ImmutableList.Builder<Symbol> builder = ImmutableList.builder();
-        new Visitor().process(expression, builder);
+        new SymbolBuilderVisitor().process(expression, builder);
         return builder.build();
     }
 
-    private static class Visitor
+    // to extract qualified name with prefix
+    public static Set<QualifiedName> extractNames(Expression expression, Set<Expression> columnReferences)
+    {
+        ImmutableSet.Builder<QualifiedName> builder = ImmutableSet.builder();
+        new QualifiedNameBuilderVisitor(columnReferences).process(expression, builder);
+        return builder.build();
+    }
+
+    private static class SymbolBuilderVisitor
             extends DefaultExpressionTraversalVisitor<Void, ImmutableList.Builder<Symbol>>
     {
         @Override
         protected Void visitQualifiedNameReference(QualifiedNameReference node, ImmutableList.Builder<Symbol> builder)
         {
             builder.add(Symbol.fromQualifiedName(node.getName()));
+            return null;
+        }
+    }
+
+    private static class QualifiedNameBuilderVisitor
+            extends DefaultExpressionTraversalVisitor<Void, ImmutableSet.Builder<QualifiedName>>
+    {
+        private final Set<Expression> columnReferences;
+
+        private QualifiedNameBuilderVisitor(Set<Expression> columnReferences)
+        {
+            this.columnReferences = requireNonNull(columnReferences, "columnReferences is null");
+        }
+
+        @Override
+        protected Void visitDereferenceExpression(DereferenceExpression node, ImmutableSet.Builder<QualifiedName> builder)
+        {
+            if (columnReferences.contains(node)) {
+                builder.add(DereferenceExpression.getQualifiedName(node));
+            }
+            else {
+                process(node.getBase(), builder);
+            }
+            return null;
+        }
+
+        @Override
+        protected Void visitQualifiedNameReference(QualifiedNameReference node, ImmutableSet.Builder<QualifiedName> builder)
+        {
+            builder.add(node.getName());
             return null;
         }
     }

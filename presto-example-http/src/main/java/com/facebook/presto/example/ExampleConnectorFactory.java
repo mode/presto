@@ -13,8 +13,9 @@
  */
 package com.facebook.presto.example;
 
-import com.facebook.presto.spi.Connector;
-import com.facebook.presto.spi.ConnectorFactory;
+import com.facebook.presto.spi.ConnectorHandleResolver;
+import com.facebook.presto.spi.connector.Connector;
+import com.facebook.presto.spi.connector.ConnectorFactory;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableMap;
@@ -24,7 +25,7 @@ import io.airlift.json.JsonModule;
 
 import java.util.Map;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class ExampleConnectorFactory
         implements ConnectorFactory
@@ -34,8 +35,8 @@ public class ExampleConnectorFactory
 
     public ExampleConnectorFactory(TypeManager typeManager, Map<String, String> optionalConfig)
     {
-        this.typeManager = checkNotNull(typeManager, "typeManager is null");
-        this.optionalConfig = ImmutableMap.copyOf(checkNotNull(optionalConfig, "optionalConfig is null"));
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
+        this.optionalConfig = ImmutableMap.copyOf(requireNonNull(optionalConfig, "optionalConfig is null"));
     }
 
     @Override
@@ -45,11 +46,15 @@ public class ExampleConnectorFactory
     }
 
     @Override
+    public ConnectorHandleResolver getHandleResolver()
+    {
+        return new ExampleHandleResolver();
+    }
+
+    @Override
     public Connector create(final String connectorId, Map<String, String> requiredConfig)
     {
-        checkNotNull(requiredConfig, "requiredConfig is null");
-        checkNotNull(optionalConfig, "optionalConfig is null");
-
+        requireNonNull(requiredConfig, "requiredConfig is null");
         try {
             // A plugin is not required to use Guice; it is just very convenient
             Bootstrap app = new Bootstrap(

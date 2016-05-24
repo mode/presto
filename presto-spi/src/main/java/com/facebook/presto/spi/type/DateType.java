@@ -70,7 +70,7 @@ public final class DateType
     }
 
     @Override
-    public int hash(Block block, int position)
+    public long hash(Block block, int position)
     {
         return block.getInt(position, 0);
     }
@@ -78,6 +78,8 @@ public final class DateType
     @Override
     public int compareTo(Block leftBlock, int leftPosition, Block rightBlock, int rightPosition)
     {
+        // WARNING: the correctness of InCodeGenerator is dependent on the implementation of this
+        // function being the equivalence of internal long representation.
         int leftValue = leftBlock.getInt(leftPosition, 0);
         int rightValue = rightBlock.getInt(rightPosition, 0);
         return Integer.compare(leftValue, rightValue);
@@ -105,5 +107,17 @@ public final class DateType
     public void writeLong(BlockBuilder blockBuilder, long value)
     {
         blockBuilder.writeInt((int) value).closeEntry();
+    }
+
+    @Override
+    public boolean equals(Object other)
+    {
+        return other == DATE;
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return getClass().hashCode();
     }
 }

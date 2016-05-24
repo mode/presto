@@ -17,7 +17,7 @@ package com.facebook.presto.plugin.blackhole;
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.ConnectorInsertTableHandle;
-import com.facebook.presto.spi.ConnectorMetadata;
+import com.facebook.presto.spi.ConnectorNewTableLayout;
 import com.facebook.presto.spi.ConnectorOutputTableHandle;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorTableHandle;
@@ -29,10 +29,11 @@ import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
 import com.facebook.presto.spi.SchemaTablePrefix;
-import com.facebook.presto.spi.TupleDomain;
-import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.spi.connector.ConnectorMetadata;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
 import io.airlift.slice.Slice;
 
 import java.util.Collection;
@@ -42,13 +43,20 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.DISTRIBUTED_ON;
+import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.FIELD_LENGTH_PROPERTY;
+import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.PAGES_PER_SPLIT_PROPERTY;
+import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.ROWS_PER_PAGE_PROPERTY;
+import static com.facebook.presto.plugin.blackhole.BlackHoleConnector.SPLIT_COUNT_PROPERTY;
 import static com.facebook.presto.plugin.blackhole.BlackHoleInsertTableHandle.BLACK_HOLE_INSERT_TABLE_HANDLE;
-import static com.facebook.presto.plugin.blackhole.BlackHoleTableLayoutHandle.BLACK_HOLE_TABLE_LAYOUT_HANDLE;
 import static com.facebook.presto.plugin.blackhole.Types.checkType;
-import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
+import static com.facebook.presto.spi.StandardErrorCode.INVALID_TABLE_PROPERTY;
 import static com.google.common.base.Preconditions.checkArgument;
+import static java.text.MessageFormat.format;
+import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toMap;
+import static java.util.stream.Collectors.toSet;
 
 public class BlackHoleMetadata
         implements ConnectorMetadata
@@ -56,12 +64,6 @@ public class BlackHoleMetadata
     public static final String SCHEMA_NAME = "default";
 
     private final Map<String, BlackHoleTableHandle> tables = new ConcurrentHashMap<>();
-    private final TypeManager typeManager;
-
-    public BlackHoleMetadata(TypeManager typeManager)
-    {
-        this.typeManager = typeManager;
-    }
 
     @Override
     public List<String> listSchemaNames(ConnectorSession session)
@@ -76,38 +78,25 @@ public class BlackHoleMetadata
     }
 
     @Override
-    public ConnectorTableMetadata getTableMetadata(ConnectorTableHandle tableHandle)
+    public ConnectorTableMetadata getTableMetadata(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         BlackHoleTableHandle blackHoleTableHandle = checkType(tableHandle, BlackHoleTableHandle.class, "tableHandle");
-        return blackHoleTableHandle.toTableMetadata(typeManager);
+        return blackHoleTableHandle.toTableMetadata();
     }
 
     @Override
     public List<SchemaTableName> listTables(ConnectorSession session, String schemaNameOrNull)
     {
-        checkArgument(schemaNameOrNull == null || schemaNameOrNull.equals(SCHEMA_NAME),
-                "Only '%s' schema is supported", SCHEMA_NAME);
+        if (schemaNameOrNull != null && !schemaNameOrNull.equals(SCHEMA_NAME)) {
+            return ImmutableList.of();
+        }
         return tables.values().stream()
                 .map(BlackHoleTableHandle::toSchemaTableName)
                 .collect(toList());
     }
 
     @Override
-    public ColumnHandle getSampleWeightColumnHandle(ConnectorTableHandle tableHandle)
-    {
-        //  returns null as the table does not contain sampled data
-        // (see {@link com.facebook.presto.spi.ConnectorMetadata.getSampleWeightColumnHandle()}
-        return null;
-    }
-
-    @Override
-    public boolean canCreateSampledTables(ConnectorSession session)
-    {
-        return false;
-    }
-
-    @Override
-    public Map<String, ColumnHandle> getColumnHandles(ConnectorTableHandle tableHandle)
+    public Map<String, ColumnHandle> getColumnHandles(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         BlackHoleTableHandle blackHoleTableHandle = checkType(tableHandle, BlackHoleTableHandle.class, "tableHandle");
         return blackHoleTableHandle.getColumnHandles().stream()
@@ -115,10 +104,10 @@ public class BlackHoleMetadata
     }
 
     @Override
-    public ColumnMetadata getColumnMetadata(ConnectorTableHandle tableHandle, ColumnHandle columnHandle)
+    public ColumnMetadata getColumnMetadata(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle columnHandle)
     {
         BlackHoleColumnHandle blackHoleColumnHandle = checkType(columnHandle, BlackHoleColumnHandle.class, "columnHandle");
-        return blackHoleColumnHandle.toColumnMetadata(typeManager);
+        return blackHoleColumnHandle.toColumnMetadata();
     }
 
     @Override
@@ -126,46 +115,94 @@ public class BlackHoleMetadata
     {
         return tables.values().stream()
                 .filter(table -> prefix.matches(table.toSchemaTableName()))
-                .collect(toMap(BlackHoleTableHandle::toSchemaTableName, handle -> handle.toTableMetadata(typeManager).getColumns()));
+                .collect(toMap(BlackHoleTableHandle::toSchemaTableName, handle -> handle.toTableMetadata().getColumns()));
     }
 
     @Override
-    public void dropTable(ConnectorTableHandle tableHandle)
+    public void dropTable(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         BlackHoleTableHandle blackHoleTableHandle = checkType(tableHandle, BlackHoleTableHandle.class, "tableHandle");
         tables.remove(blackHoleTableHandle.getTableName());
     }
 
     @Override
-    public void renameTable(ConnectorTableHandle tableHandle, SchemaTableName newTableName)
+    public void renameTable(ConnectorSession session, ConnectorTableHandle tableHandle, SchemaTableName newTableName)
     {
         BlackHoleTableHandle oldTableHandle = checkType(tableHandle, BlackHoleTableHandle.class, "tableHandle");
         BlackHoleTableHandle newTableHandle = new BlackHoleTableHandle(
                 oldTableHandle.getSchemaName(),
                 newTableName.getTableName(),
-                oldTableHandle.getColumnHandles()
+                oldTableHandle.getColumnHandles(),
+                oldTableHandle.getSplitCount(),
+                oldTableHandle.getPagesPerSplit(),
+                oldTableHandle.getRowsPerPage(),
+                oldTableHandle.getFieldsLength()
         );
-        synchronized (tables) {
-            tables.remove(oldTableHandle.getTableName());
-            tables.put(newTableName.getTableName(), newTableHandle);
-        }
+        tables.remove(oldTableHandle.getTableName());
+        tables.put(newTableName.getTableName(), newTableHandle);
     }
 
     @Override
     public void createTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
     {
-        ConnectorOutputTableHandle outputTableHandle = beginCreateTable(session, tableMetadata);
-        commitCreateTable(outputTableHandle, ImmutableList.of());
+        ConnectorOutputTableHandle outputTableHandle = beginCreateTable(session, tableMetadata, Optional.empty());
+        finishCreateTable(session, outputTableHandle, ImmutableList.of());
     }
 
     @Override
-    public ConnectorOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata)
+    public Optional<ConnectorNewTableLayout> getNewTableLayout(ConnectorSession connectorSession, ConnectorTableMetadata tableMetadata)
     {
-        return new BlackHoleOutputTableHandle(new BlackHoleTableHandle(tableMetadata));
+        List<String> distributeColumns = (List<String>) tableMetadata.getProperties().get(DISTRIBUTED_ON);
+        if (distributeColumns.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Set<String> undefinedColumns = Sets.difference(
+                ImmutableSet.copyOf(distributeColumns),
+                tableMetadata.getColumns().stream()
+                        .map(ColumnMetadata::getName)
+                        .collect(toSet()));
+        if (!undefinedColumns.isEmpty()) {
+            throw new PrestoException(INVALID_TABLE_PROPERTY, "Distribute columns not defined on table: " + undefinedColumns);
+        }
+
+        return Optional.of(new ConnectorNewTableLayout(BlackHolePartitioningHandle.INSTANCE, distributeColumns));
     }
 
     @Override
-    public void commitCreateTable(ConnectorOutputTableHandle tableHandle, Collection<Slice> fragments)
+    public ConnectorOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, Optional<ConnectorNewTableLayout> layout)
+    {
+        int splitCount = (Integer) tableMetadata.getProperties().get(SPLIT_COUNT_PROPERTY);
+        int pagesPerSplit = (Integer) tableMetadata.getProperties().get(PAGES_PER_SPLIT_PROPERTY);
+        int rowsPerPage = (Integer) tableMetadata.getProperties().get(ROWS_PER_PAGE_PROPERTY);
+        int fieldsLength = (Integer) tableMetadata.getProperties().get(FIELD_LENGTH_PROPERTY);
+
+        if (splitCount < 0) {
+            throw new PrestoException(INVALID_TABLE_PROPERTY, SPLIT_COUNT_PROPERTY + " property is negative");
+        }
+        if (pagesPerSplit < 0) {
+            throw new PrestoException(INVALID_TABLE_PROPERTY, PAGES_PER_SPLIT_PROPERTY + " property is negative");
+        }
+        if (rowsPerPage < 0) {
+            throw new PrestoException(INVALID_TABLE_PROPERTY, ROWS_PER_PAGE_PROPERTY + " property is negative");
+        }
+
+        if (((splitCount > 0) || (pagesPerSplit > 0) || (rowsPerPage > 0)) &&
+                ((splitCount == 0) || (pagesPerSplit == 0) || (rowsPerPage == 0))) {
+            throw new PrestoException(INVALID_TABLE_PROPERTY, format("All properties [%s, %s, %s] must be set if any are set",
+                    SPLIT_COUNT_PROPERTY, PAGES_PER_SPLIT_PROPERTY, ROWS_PER_PAGE_PROPERTY));
+        }
+
+        return new BlackHoleOutputTableHandle(new BlackHoleTableHandle(
+                tableMetadata,
+                splitCount,
+                pagesPerSplit,
+                rowsPerPage,
+                fieldsLength));
+    }
+
+    @Override
+    public void finishCreateTable(ConnectorSession session, ConnectorOutputTableHandle tableHandle, Collection<Slice> fragments)
     {
         BlackHoleOutputTableHandle blackHoleOutputTableHandle = checkType(tableHandle, BlackHoleOutputTableHandle.class, "tableHandle");
         BlackHoleTableHandle table = blackHoleOutputTableHandle.getTable();
@@ -179,48 +216,37 @@ public class BlackHoleMetadata
     }
 
     @Override
-    public void commitInsert(ConnectorInsertTableHandle insertHandle, Collection<Slice> fragments)
+    public void finishInsert(ConnectorSession session, ConnectorInsertTableHandle insertHandle, Collection<Slice> fragments) {}
+
+    @Override
+    public List<ConnectorTableLayoutResult> getTableLayouts(
+            ConnectorSession session,
+            ConnectorTableHandle handle,
+            Constraint<ColumnHandle> constraint,
+            Optional<Set<ColumnHandle>> desiredColumns)
     {
+        requireNonNull(handle, "handle is null");
+        checkArgument(handle instanceof BlackHoleTableHandle);
+        BlackHoleTableHandle blackHoleHandle = (BlackHoleTableHandle) handle;
+
+        BlackHoleTableLayoutHandle layoutHandle = new BlackHoleTableLayoutHandle(
+                blackHoleHandle.getSplitCount(),
+                blackHoleHandle.getPagesPerSplit(),
+                blackHoleHandle.getRowsPerPage(),
+                blackHoleHandle.getFieldsLength());
+        return ImmutableList.of(new ConnectorTableLayoutResult(getTableLayout(session, layoutHandle), TupleDomain.all()));
     }
 
     @Override
-    public void createView(ConnectorSession session, SchemaTableName viewName, String viewData, boolean replace)
+    public ConnectorTableLayout getTableLayout(ConnectorSession session, ConnectorTableLayoutHandle handle)
     {
-        throw viewsAreNotSupportedException();
-    }
-
-    @Override
-    public void dropView(ConnectorSession session, SchemaTableName viewName)
-    {
-        throw viewsAreNotSupportedException();
-    }
-
-    private PrestoException viewsAreNotSupportedException()
-    {
-        return new PrestoException(NOT_SUPPORTED, "This connector does not support views");
-    }
-
-    @Override
-    public List<SchemaTableName> listViews(ConnectorSession session, String schemaNameOrNull)
-    {
-        return ImmutableList.of();
-    }
-
-    @Override
-    public Map<SchemaTableName, String> getViews(ConnectorSession session, SchemaTablePrefix prefix)
-    {
-        return ImmutableMap.of();
-    }
-
-    @Override
-    public List<ConnectorTableLayoutResult> getTableLayouts(ConnectorTableHandle table, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns)
-    {
-        return ImmutableList.of(new ConnectorTableLayoutResult(getTableLayout(BLACK_HOLE_TABLE_LAYOUT_HANDLE), TupleDomain.none()));
-    }
-
-    @Override
-    public ConnectorTableLayout getTableLayout(ConnectorTableLayoutHandle handle)
-    {
-        return new ConnectorTableLayout(handle, Optional.empty(), TupleDomain.none(), Optional.empty(), Optional.empty(), ImmutableList.of());
+        return new ConnectorTableLayout(
+                handle,
+                Optional.empty(),
+                TupleDomain.none(),
+                Optional.empty(),
+                Optional.empty(),
+                Optional.empty(),
+                ImmutableList.of());
     }
 }

@@ -25,13 +25,12 @@ import kafka.javaapi.consumer.SimpleConsumer;
 
 import javax.annotation.PreDestroy;
 import javax.inject.Inject;
-import javax.inject.Named;
 
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 
-import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Manages connections to the Kafka nodes. A worker may connect to multiple Kafka nodes depending on the segments and partitions
@@ -44,17 +43,22 @@ public class KafkaSimpleConsumerManager
     private final LoadingCache<HostAddress, SimpleConsumer> consumerCache;
 
     private final String connectorId;
-    private final KafkaConnectorConfig kafkaConnectorConfig;
     private final NodeManager nodeManager;
+    private final int connectTimeoutMillis;
+    private final int bufferSizeBytes;
 
     @Inject
-    KafkaSimpleConsumerManager(@Named("connectorId") String connectorId,
+    public KafkaSimpleConsumerManager(
+            KafkaConnectorId connectorId,
             KafkaConnectorConfig kafkaConnectorConfig,
             NodeManager nodeManager)
     {
-        this.connectorId = checkNotNull(connectorId, "connectorId is null");
-        this.kafkaConnectorConfig = checkNotNull(kafkaConnectorConfig, "kafkaConfig is null");
-        this.nodeManager = checkNotNull(nodeManager, "nodeManager is null");
+        this.connectorId = requireNonNull(connectorId, "connectorId is null").toString();
+        this.nodeManager = requireNonNull(nodeManager, "nodeManager is null");
+
+        requireNonNull(kafkaConnectorConfig, "kafkaConfig is null");
+        this.connectTimeoutMillis = Ints.checkedCast(kafkaConnectorConfig.getKafkaConnectTimeout().toMillis());
+        this.bufferSizeBytes = Ints.checkedCast(kafkaConnectorConfig.getKafkaBufferSize().toBytes());
 
         this.consumerCache = CacheBuilder.newBuilder().build(new SimpleConsumerCacheLoader());
     }
@@ -74,7 +78,7 @@ public class KafkaSimpleConsumerManager
 
     public SimpleConsumer getConsumer(HostAddress host)
     {
-        checkNotNull(host, "host is null");
+        requireNonNull(host, "host is null");
         try {
             return consumerCache.get(host);
         }
@@ -93,8 +97,8 @@ public class KafkaSimpleConsumerManager
             log.info("Creating new Consumer for %s", host);
             return new SimpleConsumer(host.getHostText(),
                     host.getPort(),
-                    Ints.checkedCast(kafkaConnectorConfig.getKafkaConnectTimeout().toMillis()),
-                    Ints.checkedCast(kafkaConnectorConfig.getKafkaBufferSize().toBytes()),
+                    connectTimeoutMillis,
+                    bufferSizeBytes,
                     format("presto-kafka-%s-%s", connectorId, nodeManager.getCurrentNode().getNodeIdentifier()));
         }
     }

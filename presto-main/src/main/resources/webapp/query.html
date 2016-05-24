@@ -3,11 +3,16 @@
     <meta charset="utf-8">
 
     <script src="vendor/d3/d3-3.3.4.js"></script>
+    <script src="vendor/jquery/jquery-1.11.1.min.js"></script>
+    <script src="vendor/stickytableheaders/jquery.stickytableheaders.min.js"></script>
+    <script src="vendor/bootstrap/js/bootstrap.js"></script>
+    <script src="vendor/bootstrap-sortable/bootstrap-sortable.js"></script>
 
     <link href="vendor/bootstrap/css/bootstrap.css" rel="stylesheet" type="text/css">
+    <link href="vendor/bootstrap-sortable/bootstrap-sortable.css" rel="stylesheet" type="text/css">
 
-    <link rel="stylesheet" href="vendor/highlightjs/7.3/styles/idea.min.css">
-    <script src="vendor/highlightjs/7.3/highlight.min.js"></script>
+    <link rel="stylesheet" href="vendor/highlightjs/9.3/styles/idea.css">
+    <script src="vendor/highlightjs/9.3/highlight.pack.js"></script>
 
     <style type="text/css">
         pre code {
@@ -32,6 +37,16 @@
             stroke-width: 1.5px;
         }
 
+        #tasks th {
+            background-color: #fff;
+            padding-left: 15px;
+            padding-right: 10px;
+        }
+
+        #tasks td {
+            padding-left: 15px;
+        }
+
         #tasks td:nth-child(4),
         #tasks td:nth-child(5),
         #tasks td:nth-child(6),
@@ -51,20 +66,25 @@
             word-wrap: normal;
             overflow-y: hidden;
         }
+
+        #main {
+            display: none;
+        }
     </style>
 </head>
 
 <body>
 
+<div id="loading" class="container">
+    <h1 id="loading-message">Loading...</h1>
+</div>
 
-<div class="container">
+<div id="main" class="container">
     <div class="page-header">
         <h1>Presto :: Query <span id="queryId"></span></h1>
     </div>
 
     <h2>Summary</h2>
-
-    <div class="sql"><pre><code id="query"></code></pre></div>
 
     <dl class="dl-horizontal">
         <dt>Query State</dt>
@@ -72,6 +92,9 @@
 
         <dt>User</dt>
         <dd id="sessionUser"></dd>
+
+        <dt>Principal</dt>
+        <dd id="sessionPrincipal"></dd>
 
         <dt>Source</dt>
         <dd id="sessionSource"></dd>
@@ -82,14 +105,23 @@
         <dt>Schema</dt>
         <dd id="sessionSchema"></dd>
 
+        <dt>Create Time</dt>
+        <dd id="createTime"></dd>
+
         <dt>Elapsed</dt>
         <dd id="elapsedTime"></dd>
+
+        <dt>Queued</dt>
+        <dd id="queuedTime"></dd>
+
+        <dt>End Time</dt>
+        <dd id="endTime"></dd>
 
         <dt>Memory Pool</dt>
         <dd id="memoryPool"></dd>
 
-        <dt>Memory</dt>
-        <dd id="memory"></dd>
+        <dt>Total Memory</dt>
+        <dd id="totalMemory"></dd>
 
         <dt>CPU Time</dt>
         <dd id="cpuTime"></dd>
@@ -100,17 +132,17 @@
         <dt>Data Size</dt>
         <dd id="dataSize"></dd>
 
+        <dt>Cumulative Memory</dt>
+        <dd id="cumulativeMemory"></dd>
+
         <dt>Raw</dt>
         <dd><a id="rawJson"></a></dd>
 
-        <dt>Execution</dt>
+        <dt>Plan</dt>
         <dd><a id="executionLink"></a></dd>
 
         <dt>Visualization</dt>
         <dd><a id="timelineLink">Timeline</a></dd>
-
-        <dt>Kill</dt>
-        <dd id="killQuery"></dd>
 
         <dt>Error Type</dt>
         <dd id="errorType"></dd>
@@ -123,7 +155,14 @@
 
         <dt>Session Properties</dt>
         <dd id="sessionProperties"></dd>
+
+        <dt>Kill</dt>
+        <dd id="killQuery"></dd>
     </dl>
+
+    <h2>Query</h2>
+
+    <pre><code class="sql" id="query"></code></pre>
 
     <h2>Stages</h2>
 
@@ -131,10 +170,10 @@
 
     <h2>Tasks</h2>
 
-    <table id="tasks" class="table table-striped">
+    <table id="tasks" class="table table-striped sortable">
         <thead>
         <tr>
-            <th>Id</th>
+            <th data-defaultsort="asc">Id</th>
             <th>Host</th>
             <th>State</th>
             <th>Rows</th>
@@ -144,6 +183,7 @@
             <th>Splits Pending</th>
             <th>Splits Running</th>
             <th>Splits Done</th>
+            <th>Elapsed Time</th>
             <th>Output Buffers</th>
             <th>Buffered Pages</th>
         </tr>
@@ -155,9 +195,21 @@
 
 <script>
 
+var queryId = window.location.search.substring(1);
+d3.json('/v1/query/' + queryId, function (query) {
+    if (!query) {
+        d3.select('#loading-message').text('Query not found: ' + queryId);
+    }
+    else {
+        d3.select('#loading').style('display', 'none');
+        d3.select('#main').style('display', 'block');
+    }
 
-d3.json('/v1/query/' + window.location.search.substring(1), function (query) {
     d3.select('#query').text(query.query);
+    $('#query').each(function(i, block) {
+      hljs.highlightBlock(block);
+    });
+
     d3.select('#queryId').text(query.queryId);
     if (query.queryStats.fullyBlocked && query.state == "RUNNING") {
         var state = "BLOCKED";
@@ -170,15 +222,22 @@ d3.json('/v1/query/' + window.location.search.substring(1), function (query) {
         d3.select('#queryState').text(query.state);
     }
     d3.select('#sessionUser').text(query.session.user);
+    d3.select('#sessionPrincipal').text(query.session.principal);
     d3.select('#sessionSource').text(query.session.source);
     d3.select('#sessionCatalog').text(query.session.catalog);
     d3.select('#sessionSchema').text(query.session.schema);
+    d3.select('#createTime').text(formatDateTime(new Date(query.queryStats.createTime)));
     d3.select('#elapsedTime').text(query.queryStats.elapsedTime);
+    d3.select('#queuedTime').text(query.queryStats.queuedTime);
+    if (query.queryStats.endTime) {
+        d3.select('#endTime').text(formatDateTime(new Date(query.queryStats.endTime)));
+    }
     d3.select('#memoryPool').text(query.memoryPool);
-    d3.select('#memory').text(query.queryStats.totalMemoryReservation);
+    d3.select('#totalMemory').text(query.queryStats.totalMemoryReservation);
     d3.select('#cpuTime').text(query.queryStats.totalCpuTime);
     d3.select('#rows').text(formatCount(query.queryStats.rawInputPositions));
     d3.select('#dataSize').text(query.queryStats.rawInputDataSize);
+    d3.select('#cumulativeMemory').text(formatCumulativeMemory(query.queryStats.cumulativeMemory));
 
     var button = d3.select('#killQuery')
         .append('button')
@@ -237,19 +296,27 @@ d3.json('/v1/query/' + window.location.search.substring(1), function (query) {
     d3.select('#rawJson').text(uri);
     d3.select('#rawJson').attr("href", uri);
 
-    var executionLink = "/ui/query-execution?" + query.queryId;
+    var executionLink = "/ui/plan?" + query.queryId;
     d3.select('#executionLink').text(executionLink);
     d3.select('#executionLink').attr("href", executionLink);
 
     var timelineLink = "/timeline.html?" + query.queryId;
     d3.select('#timelineLink').attr("href", timelineLink);
 
-    hljs.initHighlighting();
-
     renderStagesTree(query.outputStage);
 
-    renderTable('tasks', getTasks(query.outputStage).sort(taskIdComparator));
+    renderTable('tasks', getTasks(query.outputStage));
+    $.bootstrapSortable(applyLast=true);
+    $('#tasks').stickyTableHeaders();
 });
+
+function formatDateTime(date) {
+    return d3.time.format("%Y-%m-%d %H:%M:%S %Z")(date);
+}
+
+function formatCumulativeMemory(cumulativeMemory) {
+    return (cumulativeMemory / Math.pow(1000.0, 4)).toLocaleString() + 'GB seconds';
+}
 
 function formatStackTrace(info) {
     return doFormatStackTrace(info, [], "", "");
@@ -317,20 +384,9 @@ function removeQueryId(id)
     return id
 }
 
-function taskIdComparator(a, b) {
-    a = a[0].split('.').map(parseFloat);
-    b = b[0].split('.').map(parseFloat);
-    return numericArrayComparator(a, b);
-}
-
-function numericArrayComparator(a, b) {
-    for (var i = 0; (i < a.length) && (i < b.length); i++) {
-        if (a[i] < b[i]) return -1;
-        if (a[i] > b[i]) return 1;
-    }
-    if (a.length < b.length) return -1;
-    if (a.length > b.length) return 1;
-    return 0;
+function taskIdToTinySortCompatibleString(id) {
+    var taskIdArr = removeQueryId(id).split(".");
+    return taskIdArr.map( function(numStr) { return new Array(5 - numStr.length).join("0") + numStr }).join("|");
 }
 
 function getTasks(stage) {
@@ -353,18 +409,19 @@ function taskData(d) {
     });
 
     return [
-        "<a href=" + d.self + "?pretty>" + htmlEscape(d.taskId) + "</a>",
-        htmlEscape(urlHostname(d.self)),
-        htmlEscape(formatState(d.state, d.stats.fullyBlocked)),
-        htmlEscape(formatCount(rows)),
-        htmlEscape(formatCount(computeRate(rows, elapsed))),
-        htmlEscape(formatDataSize(bytes)),
-        htmlEscape(formatDataSize(computeRate(bytes, elapsed))),
-        htmlEscape(d.stats.queuedDrivers),
-        htmlEscape(d.stats.runningDrivers),
-        htmlEscape(d.stats.completedDrivers),
-        htmlEscape(finishedBuffers + ' / ' + allBuffers),
-        htmlEscape(bufferedPages)
+        {"display": "<a href=" + d.taskStatus.self + "?pretty>" + htmlEscape(d.taskStatus.taskId) + "</a>", "sortableString": taskIdToTinySortCompatibleString(d.taskStatus.taskId)},
+        {"display": htmlEscape(urlHostname(d.taskStatus.self))},
+        {"display": htmlEscape(formatState(d.taskStatus.state, d.stats.fullyBlocked))},
+        {"display": htmlEscape(formatCount(rows)), "sortableString": rows},
+        {"display": htmlEscape(formatCount(computeRate(rows, elapsed))), "sortableString": computeRate(rows, elapsed)},
+        {"display": htmlEscape(formatDataSize(bytes)), "sortableString": bytes},
+        {"display": htmlEscape(formatDataSize(computeRate(bytes, elapsed))), "sortableString": computeRate(bytes, elapsed)},
+        {"display": htmlEscape(d.stats.queuedDrivers)},
+        {"display": htmlEscape(d.stats.runningDrivers)},
+        {"display": htmlEscape(d.stats.completedDrivers)},
+        {"display": htmlEscape(d.stats.elapsedTime)},
+        {"display": htmlEscape(finishedBuffers + ' / ' + allBuffers)},
+        {"display": htmlEscape(bufferedPages)}
     ];
 }
 
@@ -523,7 +580,12 @@ function renderTable(id, data) {
             .enter()
             .append("td")
             .html(function (d) {
-                return d;
+                return d["display"]
+            })
+            .attr("data-value", function(d) {
+                if ("sortableString" in d) {
+                    return d["sortableString"];
+                }
             });
 }
 

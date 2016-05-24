@@ -17,7 +17,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class WindowFrame
         extends Node
@@ -33,9 +33,20 @@ public class WindowFrame
 
     public WindowFrame(Type type, FrameBound start, Optional<FrameBound> end)
     {
-        this.type = checkNotNull(type, "type is null");
-        this.start = checkNotNull(start, "start is null");
-        this.end = checkNotNull(end, "end is null");
+        this(Optional.empty(), type, start, end);
+    }
+
+    public WindowFrame(NodeLocation location, Type type, FrameBound start, Optional<FrameBound> end)
+    {
+        this(Optional.of(location), type, start, end);
+    }
+
+    private WindowFrame(Optional<NodeLocation> location, Type type, FrameBound start, Optional<FrameBound> end)
+    {
+        super(location);
+        this.type = requireNonNull(type, "type is null");
+        this.start = requireNonNull(start, "start is null");
+        this.end = requireNonNull(end, "end is null");
     }
 
     public Type getType()

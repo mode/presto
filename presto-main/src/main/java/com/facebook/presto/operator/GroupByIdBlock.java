@@ -17,20 +17,25 @@ import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockEncoding;
 import io.airlift.slice.Slice;
+import org.openjdk.jol.info.ClassLayout;
+
+import java.util.List;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class GroupByIdBlock
         implements Block
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(GroupByIdBlock.class).instanceSize();
+
     private final long groupCount;
     private final Block block;
 
     public GroupByIdBlock(long groupCount, Block block)
     {
-        checkNotNull(block, "block is null");
+        requireNonNull(block, "block is null");
         this.groupCount = groupCount;
         this.block = block;
     }
@@ -142,7 +147,7 @@ public class GroupByIdBlock
     }
 
     @Override
-    public int hash(int position, int offset, int length)
+    public long hash(int position, int offset, int length)
     {
         return block.hash(position, offset, length);
     }
@@ -180,13 +185,19 @@ public class GroupByIdBlock
     @Override
     public int getRetainedSizeInBytes()
     {
-        return block.getRetainedSizeInBytes();
+        return INSTANCE_SIZE + block.getRetainedSizeInBytes();
     }
 
     @Override
     public BlockEncoding getEncoding()
     {
         return block.getEncoding();
+    }
+
+    @Override
+    public Block copyPositions(List<Integer> positions)
+    {
+        return block.copyPositions(positions);
     }
 
     @Override

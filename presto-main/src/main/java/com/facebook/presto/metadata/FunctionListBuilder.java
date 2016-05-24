@@ -17,28 +17,33 @@ import com.facebook.presto.operator.Description;
 import com.facebook.presto.operator.aggregation.GenericAggregationFunctionFactory;
 import com.facebook.presto.operator.aggregation.InternalAggregationFunction;
 import com.facebook.presto.operator.scalar.JsonPath;
+import com.facebook.presto.operator.scalar.ReflectionParametricScalar;
 import com.facebook.presto.operator.scalar.ScalarFunction;
 import com.facebook.presto.operator.scalar.ScalarOperator;
 import com.facebook.presto.operator.window.ReflectionWindowFunctionSupplier;
+import com.facebook.presto.operator.window.SqlWindowFunction;
+import com.facebook.presto.operator.window.ValueWindowFunction;
 import com.facebook.presto.operator.window.WindowFunction;
 import com.facebook.presto.operator.window.WindowFunctionSupplier;
 import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
+import com.facebook.presto.type.Constraint;
+import com.facebook.presto.type.LiteralParameters;
 import com.facebook.presto.type.SqlType;
 import com.google.common.base.Throwables;
-import com.google.common.collect.FluentIterable;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import com.google.common.primitives.Primitives;
 import io.airlift.joni.Regex;
-import io.airlift.slice.Slice;
 
 import javax.annotation.Nullable;
 
 import java.lang.annotation.Annotation;
+
 import java.lang.invoke.MethodHandle;
 import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Method;
@@ -46,58 +51,63 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
-import static com.facebook.presto.metadata.FunctionRegistry.operatorInfo;
+import static com.facebook.presto.metadata.FunctionKind.SCALAR;
+import static com.facebook.presto.metadata.FunctionKind.WINDOW;
+import static com.facebook.presto.metadata.Signature.longVariableExpression;
+import static com.facebook.presto.metadata.Signature.typeVariable;
+import static com.facebook.presto.spi.StandardErrorCode.FUNCTION_IMPLEMENTATION_ERROR;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.facebook.presto.type.TypeUtils.resolveTypes;
+import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.CaseFormat.LOWER_CAMEL;
 import static com.google.common.base.CaseFormat.LOWER_UNDERSCORE;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.lang.String.format;
 import static java.lang.invoke.MethodHandles.lookup;
 import static java.util.Locale.ENGLISH;
+import static java.util.Objects.requireNonNull;
 
 public class FunctionListBuilder
 {
-    private static final Set<Class<?>> NULLABLE_ARGUMENT_TYPES = ImmutableSet.<Class<?>>of(Boolean.class, Long.class, Double.class, Slice.class);
-
-    private static final Set<Class<?>> SUPPORTED_TYPES = ImmutableSet.of(
+    private static final Set<Class<?>> NON_NULLABLE_ARGUMENT_TYPES = ImmutableSet.of(
             long.class,
-            Long.class,
             double.class,
-            Double.class,
-            Slice.class,
             boolean.class,
-            Boolean.class,
             Regex.class,
             JsonPath.class);
 
-    private static final Set<Class<?>> SUPPORTED_RETURN_TYPES = ImmutableSet.of(
-            long.class,
-            double.class,
-            Slice.class,
-            boolean.class,
-            int.class,
-            Regex.class,
-            JsonPath.class);
-
-    private final List<ParametricFunction> functions = new ArrayList<>();
+    private final List<SqlFunction> functions = new ArrayList<>();
     private final TypeManager typeManager;
 
     public FunctionListBuilder(TypeManager typeManager)
     {
-        this.typeManager = checkNotNull(typeManager, "typeManager is null");
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
     }
 
     public FunctionListBuilder window(String name, Type returnType, List<? extends Type> argumentTypes, Class<? extends WindowFunction> functionClass)
     {
         WindowFunctionSupplier windowFunctionSupplier = new ReflectionWindowFunctionSupplier<>(
-                new Signature(name, returnType.getTypeSignature(), Lists.transform(ImmutableList.copyOf(argumentTypes), Type::getTypeSignature)),
+                new Signature(name, WINDOW, returnType.getTypeSignature(), Lists.transform(ImmutableList.copyOf(argumentTypes), Type::getTypeSignature)),
                 functionClass);
 
-        functions.add(new FunctionInfo(windowFunctionSupplier.getSignature(), windowFunctionSupplier.getDescription(), windowFunctionSupplier));
+        functions.add(new SqlWindowFunction(windowFunctionSupplier));
+        return this;
+    }
+
+    public FunctionListBuilder window(String name, Class<? extends ValueWindowFunction> clazz, String typeVariable, String... argumentTypes)
+    {
+        Signature signature = new Signature(
+                name,
+                WINDOW,
+                ImmutableList.of(typeVariable(typeVariable)),
+                ImmutableList.of(),
+                parseTypeSignature(typeVariable),
+                Arrays.asList(argumentTypes).stream().map(TypeSignature::parseTypeSignature).collect(toImmutableList()),
+                false);
+        functions.add(new SqlWindowFunction(new ReflectionWindowFunctionSupplier<>(signature, clazz)));
         return this;
     }
 
@@ -115,8 +125,7 @@ public class FunctionListBuilder
         name = name.toLowerCase(ENGLISH);
 
         String description = getDescription(function.getClass());
-        Signature signature = new Signature(name, function.getFinalType().getTypeSignature(), Lists.transform(ImmutableList.copyOf(function.getParameterTypes()), Type::getTypeSignature));
-        functions.add(new FunctionInfo(signature, description, function));
+        functions.add(SqlAggregationFunction.create(name, description, function));
         return this;
     }
 
@@ -126,28 +135,68 @@ public class FunctionListBuilder
         return this;
     }
 
-    public FunctionListBuilder scalar(Signature signature, MethodHandle function, boolean deterministic, String description, boolean hidden, boolean nullable, List<Boolean> nullableArguments)
+    public FunctionListBuilder scalar(
+            Signature signature,
+            MethodHandle function,
+            Optional<MethodHandle> instanceFactory,
+            boolean deterministic,
+            String description,
+            boolean hidden,
+            boolean nullable,
+            List<Boolean> nullableArguments)
     {
-        functions.add(new FunctionInfo(signature, description, hidden, function, deterministic, nullable, nullableArguments));
+        functions.add(SqlScalarFunction.create(
+                signature,
+                description,
+                hidden,
+                function,
+                instanceFactory,
+                deterministic,
+                nullable,
+                nullableArguments));
         return this;
     }
 
-    private FunctionListBuilder operator(OperatorType operatorType, Type returnType, List<Type> parameterTypes, MethodHandle function, boolean nullable, List<Boolean> nullableArguments)
+    private FunctionListBuilder operator(
+            OperatorType operatorType,
+            List<TypeVariableConstraint> typeVariableConstraints,
+            List<LongVariableConstraint> longVariableConstraints,
+            TypeSignature returnType,
+            List<TypeSignature> argumentTypes,
+            MethodHandle function,
+            Optional<MethodHandle> instanceFactory,
+            boolean nullable,
+            List<Boolean> nullableArguments)
     {
-        FunctionInfo operatorInfo = operatorInfo(operatorType, returnType.getTypeSignature(), Lists.transform(parameterTypes, Type::getTypeSignature), function, nullable, nullableArguments);
-        functions.add(operatorInfo);
+        operatorType.validateSignature(returnType, argumentTypes);
+        functions.add(SqlOperator.create(
+                operatorType,
+                typeVariableConstraints,
+                longVariableConstraints,
+                argumentTypes,
+                returnType,
+                function,
+                instanceFactory,
+                nullable,
+                nullableArguments));
         return this;
     }
 
     public FunctionListBuilder scalar(Class<?> clazz)
     {
+        ScalarFunction scalarAnnotation = clazz.getAnnotation(ScalarFunction.class);
+        ScalarOperator operatorAnnotation = clazz.getAnnotation(ScalarOperator.class);
+        if (scalarAnnotation != null || operatorAnnotation != null) {
+            functions.add(ReflectionParametricScalar.parseDefinition(clazz));
+            return this;
+        }
         try {
             boolean foundOne = false;
             for (Method method : clazz.getMethods()) {
                 foundOne = processScalarFunction(method) || foundOne;
                 foundOne = processScalarOperator(method) || foundOne;
             }
-            checkArgument(foundOne, "Expected class %s to contain at least one method annotated with @%s", clazz.getName(), ScalarFunction.class.getSimpleName());
+            checkArgument(foundOne, "Expected class %s to be annotated with @%s, or contain at least one method annotated with @%s", clazz.getName(), ScalarFunction.class.getSimpleName(), ScalarFunction.class.getSimpleName());
         }
         catch (IllegalAccessException e) {
             throw Throwables.propagate(e);
@@ -155,18 +204,18 @@ public class FunctionListBuilder
         return this;
     }
 
-    public FunctionListBuilder functions(ParametricFunction ... parametricFunctions)
+    public FunctionListBuilder functions(SqlFunction... sqlFunctions)
     {
-        for (ParametricFunction parametricFunction : parametricFunctions) {
-            function(parametricFunction);
+        for (SqlFunction sqlFunction : sqlFunctions) {
+            function(sqlFunction);
         }
         return this;
     }
 
-    public FunctionListBuilder function(ParametricFunction parametricFunction)
+    public FunctionListBuilder function(SqlFunction sqlFunction)
     {
-        checkNotNull(parametricFunction, "parametricFunction is null");
-        functions.add(parametricFunction);
+        requireNonNull(sqlFunction, "parametricFunction is null");
+        functions.add(sqlFunction);
         return this;
     }
 
@@ -178,6 +227,7 @@ public class FunctionListBuilder
             return false;
         }
         checkValidMethod(method);
+        Optional<MethodHandle> instanceFactory = getInstanceFactory(method);
         MethodHandle methodHandle = lookup().unreflect(method);
         String name = scalarFunction.value();
         if (name.isEmpty()) {
@@ -185,32 +235,75 @@ public class FunctionListBuilder
         }
         SqlType returnTypeAnnotation = method.getAnnotation(SqlType.class);
         checkArgument(returnTypeAnnotation != null, "Method %s return type does not have a @SqlType annotation", method);
-        Type returnType = type(typeManager, returnTypeAnnotation);
-        Signature signature = new Signature(name.toLowerCase(ENGLISH), returnType.getTypeSignature(), Lists.transform(parameterTypes(typeManager, method), Type::getTypeSignature));
+        LiteralParameters literalParametersAnnotation = method.getAnnotation(LiteralParameters.class);
+        Set<String> literalParameters = ImmutableSet.of();
+        if (literalParametersAnnotation != null) {
+            literalParameters = ImmutableSet.copyOf(literalParametersAnnotation.value());
+        }
+
+        List<LongVariableConstraint> longVariableConstraints = getLongVariableConstraints(method);
+
+        Signature signature = new Signature(
+                name.toLowerCase(ENGLISH),
+                SCALAR,
+                ImmutableList.of(),
+                longVariableConstraints,
+                parseTypeSignature(returnTypeAnnotation.value(), literalParameters),
+                parameterTypeSignatures(method, literalParameters),
+                false);
 
         verifyMethodSignature(method, signature.getReturnType(), signature.getArgumentTypes(), typeManager);
 
         List<Boolean> nullableArguments = getNullableArguments(method);
 
-        scalar(signature, methodHandle, scalarFunction.deterministic(), getDescription(method), scalarFunction.hidden(), method.isAnnotationPresent(Nullable.class), nullableArguments);
+        scalar(signature,
+                methodHandle,
+                instanceFactory,
+                scalarFunction.deterministic(),
+                getDescription(method),
+                scalarFunction.hidden(),
+                method.isAnnotationPresent(Nullable.class),
+                nullableArguments);
         for (String alias : scalarFunction.alias()) {
-            scalar(signature.withAlias(alias.toLowerCase(ENGLISH)), methodHandle, scalarFunction.deterministic(), getDescription(method), scalarFunction.hidden(), method.isAnnotationPresent(Nullable.class), nullableArguments);
+            scalar(signature.withAlias(alias.toLowerCase(ENGLISH)),
+                    methodHandle,
+                    instanceFactory,
+                    scalarFunction.deterministic(),
+                    getDescription(method),
+                    scalarFunction.hidden(),
+                    method.isAnnotationPresent(Nullable.class),
+                    nullableArguments);
         }
         return true;
+    }
+
+    private static Optional<MethodHandle> getInstanceFactory(Method method)
+            throws IllegalAccessException
+    {
+        Optional<MethodHandle> instanceFactory = Optional.empty();
+        if (!Modifier.isStatic(method.getModifiers())) {
+            try {
+                instanceFactory = Optional.of(lookup().unreflectConstructor(method.getDeclaringClass().getConstructor()));
+            }
+            catch (NoSuchMethodException e) {
+                throw new PrestoException(FUNCTION_IMPLEMENTATION_ERROR, format("%s is non-static, but its declaring class is missing a default constructor", method));
+            }
+        }
+        return instanceFactory;
     }
 
     private static Type type(TypeManager typeManager, SqlType explicitType)
     {
         Type type = typeManager.getType(parseTypeSignature(explicitType.value()));
-        checkNotNull(type, "No type found for '%s'", explicitType.value());
+        requireNonNull(type, format("No type found for '%s'", explicitType.value()));
         return type;
     }
 
-    private static List<Type> parameterTypes(TypeManager typeManager, Method method)
+    private static List<TypeSignature> parameterTypeSignatures(Method method, Set<String> literalParameters)
     {
         Annotation[][] parameterAnnotations = method.getParameterAnnotations();
+        ImmutableList.Builder<TypeSignature> parameters = ImmutableList.builder();
 
-        ImmutableList.Builder<Type> types = ImmutableList.builder();
         for (int i = 0; i < method.getParameterTypes().length; i++) {
             Class<?> clazz = method.getParameterTypes()[i];
             // skip session parameters
@@ -227,21 +320,23 @@ public class FunctionListBuilder
                 }
             }
             checkArgument(explicitType != null, "Method %s argument %s does not have a @SqlType annotation", method, i);
-            types.add(type(typeManager, explicitType));
+            parameters.add(parseTypeSignature(explicitType.value(), literalParameters));
         }
-        return types.build();
+        return parameters.build();
     }
 
     private static void verifyMethodSignature(Method method, TypeSignature returnTypeName, List<TypeSignature> argumentTypeNames, TypeManager typeManager)
     {
-        Type returnType = typeManager.getType(returnTypeName);
-        checkNotNull(returnType, "returnType is null");
-        List<Type> argumentTypes = resolveTypes(argumentTypeNames, typeManager);
-        checkArgument(Primitives.unwrap(method.getReturnType()) == returnType.getJavaType(),
-                "Expected method %s return type to be %s (%s)",
-                method,
-                returnType.getJavaType().getName(),
-                returnType);
+        // todo figure out how to validate java type for calculated SQL type
+        if (!returnTypeName.isCalculated()) {
+            Type returnType = typeManager.getType(returnTypeName);
+            requireNonNull(returnType, "returnType is null");
+            checkArgument(Primitives.unwrap(method.getReturnType()) == returnType.getJavaType(),
+                    "Expected method %s return type to be %s (%s)",
+                    method,
+                    returnType.getJavaType().getName(),
+                    returnType);
+        }
 
         // skip Session argument
         Class<?>[] parameterTypes = method.getParameterTypes();
@@ -251,16 +346,20 @@ public class FunctionListBuilder
             annotations = Arrays.copyOfRange(annotations, 1, annotations.length);
         }
 
-        for (int i = 0; i < parameterTypes.length; i++) {
+        for (int i = 0; i < argumentTypeNames.size(); i++) {
+            TypeSignature expectedTypeName = argumentTypeNames.get(i);
+            if (expectedTypeName.isCalculated()) {
+                continue;
+            }
+            Type expectedType = typeManager.getType(expectedTypeName);
             Class<?> actualType = parameterTypes[i];
-            Type expectedType = argumentTypes.get(i);
-            boolean nullable = !FluentIterable.from(Arrays.asList(annotations[i])).filter(Nullable.class).isEmpty();
+            boolean nullable = Arrays.asList(annotations[i]).stream().anyMatch(Nullable.class::isInstance);
             // Only allow boxing for functions that need to see nulls
             if (Primitives.isWrapperType(actualType)) {
                 checkArgument(nullable, "Method %s has parameter with type %s that is missing @Nullable", method, actualType);
             }
             if (nullable) {
-                checkArgument(NULLABLE_ARGUMENT_TYPES.contains(actualType), "Method %s has parameter type %s, but @Nullable is not supported on this type", method, actualType);
+                checkArgument(!NON_NULLABLE_ARGUMENT_TYPES.contains(actualType), "Method %s has parameter type %s, but @Nullable is not supported on this type", method, actualType);
             }
             checkArgument(Primitives.unwrap(actualType) == expectedType.getJavaType(),
                     "Expected method %s parameter %s type to be %s (%s)",
@@ -301,28 +400,55 @@ public class FunctionListBuilder
             return false;
         }
         checkValidMethod(method);
+        Optional<MethodHandle>  instanceFactory = getInstanceFactory(method);
         MethodHandle methodHandle = lookup().unreflect(method);
         OperatorType operatorType = scalarOperator.value();
 
-        List<Type> parameterTypes = parameterTypes(typeManager, method);
+        LiteralParameters literalParametersAnnotation = method.getAnnotation(LiteralParameters.class);
+        Set<String> literalParameters = ImmutableSet.of();
+        if (literalParametersAnnotation != null) {
+            literalParameters = ImmutableSet.copyOf(literalParametersAnnotation.value());
+        }
 
-        Type returnType;
+        List<LongVariableConstraint> longVariableConstraints = getLongVariableConstraints(method);
+
+        List<TypeSignature> argumentTypes = parameterTypeSignatures(method, literalParameters);
+        TypeSignature returnTypeSignature;
+
         if (operatorType == OperatorType.HASH_CODE) {
             // todo hack for hashCode... should be int
-            returnType = BIGINT;
+            returnTypeSignature = BIGINT.getTypeSignature();
         }
         else {
             SqlType explicitType = method.getAnnotation(SqlType.class);
             checkArgument(explicitType != null, "Method %s return type does not have a @SqlType annotation", method);
-            returnType = type(typeManager, explicitType);
-
-            verifyMethodSignature(method, returnType.getTypeSignature(), Lists.transform(parameterTypes, Type::getTypeSignature), typeManager);
+            returnTypeSignature = parseTypeSignature(explicitType.value(), literalParameters);
+            verifyMethodSignature(method, returnTypeSignature, argumentTypes, typeManager);
         }
 
         List<Boolean> nullableArguments = getNullableArguments(method);
 
-        operator(operatorType, returnType, parameterTypes, methodHandle, method.isAnnotationPresent(Nullable.class), nullableArguments);
+        operator(
+                operatorType,
+                ImmutableList.of(),
+                longVariableConstraints,
+                returnTypeSignature,
+                argumentTypes,
+                methodHandle,
+                instanceFactory,
+                method.isAnnotationPresent(Nullable.class),
+                nullableArguments);
         return true;
+    }
+
+    private List<LongVariableConstraint> getLongVariableConstraints(Method method)
+    {
+        List<Constraint> annotations = Arrays.asList(method.getAnnotationsByType(Constraint.class));
+        ImmutableList.Builder<LongVariableConstraint> constraints = ImmutableList.builder();
+        for (Constraint longVariableConstraint : annotations) {
+            constraints.add(longVariableExpression(longVariableConstraint.variable(), longVariableConstraint.expression()));
+        }
+        return constraints.build();
     }
 
     private static String getDescription(AnnotatedElement annotatedElement)
@@ -340,31 +466,15 @@ public class FunctionListBuilder
     {
         String message = "@ScalarFunction method %s is not valid: ";
 
-        checkArgument(Modifier.isStatic(method.getModifiers()), message + "must be static", method);
-
-        checkArgument(SUPPORTED_RETURN_TYPES.contains(Primitives.unwrap(method.getReturnType())), message + "return type not supported", method);
         if (method.getAnnotation(Nullable.class) != null) {
             checkArgument(!method.getReturnType().isPrimitive(), message + "annotated with @Nullable but has primitive return type", method);
         }
         else {
             checkArgument(!Primitives.isWrapperType(method.getReturnType()), "not annotated with @Nullable but has boxed primitive return type", method);
         }
-
-        for (Class<?> type : getParameterTypes(method.getParameterTypes())) {
-            checkArgument(SUPPORTED_TYPES.contains(type), message + "parameter type [%s] not supported", method, type.getName());
-        }
     }
 
-    private static List<Class<?>> getParameterTypes(Class<?>... types)
-    {
-        ImmutableList<Class<?>> parameterTypes = ImmutableList.copyOf(types);
-        if (!parameterTypes.isEmpty() && parameterTypes.get(0) == ConnectorSession.class) {
-            parameterTypes = parameterTypes.subList(1, parameterTypes.size());
-        }
-        return parameterTypes;
-    }
-
-    public List<ParametricFunction> getFunctions()
+    public List<SqlFunction> getFunctions()
     {
         return ImmutableList.copyOf(functions);
     }

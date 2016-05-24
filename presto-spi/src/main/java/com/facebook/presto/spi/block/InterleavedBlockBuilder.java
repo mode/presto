@@ -15,6 +15,7 @@ package com.facebook.presto.spi.block;
 
 import com.facebook.presto.spi.type.Type;
 import io.airlift.slice.Slice;
+import org.openjdk.jol.info.ClassLayout;
 
 import java.util.List;
 
@@ -24,6 +25,9 @@ public class InterleavedBlockBuilder
         extends AbstractInterleavedBlock
         implements BlockBuilder
 {
+    // TODO: This does not account for the size of the blockEncoding field
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(InterleavedBlockBuilder.class).instanceSize();
+
     private final BlockBuilder[] blockBuilders;
     private final InterleavedBlockEncoding blockEncoding;
 
@@ -38,7 +42,7 @@ public class InterleavedBlockBuilder
     {
         this(
                 types.stream()
-                        .map(t -> t.createBlockBuilder(blockBuilderStatus, expectedEntries))
+                        .map(t -> t.createBlockBuilder(blockBuilderStatus, roundUpDivide(expectedEntries, types.size())))
                         .toArray(BlockBuilder[]::new)
         );
     }
@@ -47,9 +51,14 @@ public class InterleavedBlockBuilder
     {
         this(
                 types.stream()
-                        .map(t -> t.createBlockBuilder(blockBuilderStatus, expectedEntries, expectedBytesPerEntry))
+                        .map(t -> t.createBlockBuilder(blockBuilderStatus, roundUpDivide(expectedEntries, types.size()), expectedBytesPerEntry))
                         .toArray(BlockBuilder[]::new)
         );
+    }
+
+    private static int roundUpDivide(int dividend, int divisor)
+    {
+        return (dividend + divisor - 1) / divisor;
     }
 
     /**
@@ -62,7 +71,7 @@ public class InterleavedBlockBuilder
         this.blockEncoding = computeBlockEncoding();
         this.positionCount = 0;
         this.sizeInBytes = 0;
-        this.retainedSizeInBytes = 0;
+        this.retainedSizeInBytes = INSTANCE_SIZE;
         for (BlockBuilder blockBuilder : blockBuilders) {
             this.sizeInBytes += blockBuilder.getSizeInBytes();
             this.retainedSizeInBytes += blockBuilder.getRetainedSizeInBytes();

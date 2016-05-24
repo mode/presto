@@ -34,8 +34,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 import static org.apache.cassandra.dht.Token.TokenFactory;
 
 public class CassandraTokenSplitManager
@@ -43,13 +43,13 @@ public class CassandraTokenSplitManager
     private final CassandraThriftClient cassandraThriftClient;
     private final ExecutorService executor;
     private final int splitSize;
-    private final IPartitioner<?> partitioner;
+    private final IPartitioner partitioner;
 
     @Inject
     public CassandraTokenSplitManager(CassandraThriftConnectionFactory connectionFactory, @ForCassandra ExecutorService executor, CassandraClientConfig config)
     {
-        this.cassandraThriftClient = new CassandraThriftClient(checkNotNull(connectionFactory, "connectionFactory is null"));
-        this.executor = checkNotNull(executor, "executor is null");
+        this.cassandraThriftClient = new CassandraThriftClient(requireNonNull(connectionFactory, "connectionFactory is null"));
+        this.executor = requireNonNull(executor, "executor is null");
         this.splitSize = config.getSplitSize();
         try {
             this.partitioner = FBUtilities.newPartitioner(config.getPartitioner());
@@ -92,7 +92,7 @@ public class CassandraTokenSplitManager
      * Gets a token range and splits it up according to the suggested
      * size into input splits that Hadoop can use.
      */
-    private class SplitCallable<T extends Token<?>>
+    private class SplitCallable<T extends Token>
             implements Callable<List<TokenSplit>>
     {
         private final TokenRange range;
@@ -100,9 +100,9 @@ public class CassandraTokenSplitManager
         private final String columnFamily;
         private final int splitSize;
         private final CassandraThriftClient client;
-        private final IPartitioner<T> partitioner;
+        private final IPartitioner partitioner;
 
-        public SplitCallable(TokenRange range, String keyspace, String columnFamily, int splitSize, CassandraThriftClient client, IPartitioner<T> partitioner)
+        public SplitCallable(TokenRange range, String keyspace, String columnFamily, int splitSize, CassandraThriftClient client, IPartitioner partitioner)
         {
             checkArgument(range.rpc_endpoints.size() == range.endpoints.size(), "rpc_endpoints size must match endpoints size");
             this.range = range;
@@ -122,13 +122,13 @@ public class CassandraTokenSplitManager
 
             // turn the sub-ranges into InputSplits
             List<String> endpoints = range.endpoints;
-            TokenFactory<T> factory = partitioner.getTokenFactory();
+            TokenFactory factory = partitioner.getTokenFactory();
             for (CfSplit subSplit : subSplits) {
-                Token<T> left = factory.fromString(subSplit.getStart_token());
-                Token<T> right = factory.fromString(subSplit.getEnd_token());
-                Range<Token<T>> range = new Range<>(left, right, partitioner);
-                List<Range<Token<T>>> ranges = range.isWrapAround() ? range.unwrap() : ImmutableList.of(range);
-                for (Range<Token<T>> subRange : ranges) {
+                Token left = factory.fromString(subSplit.getStart_token());
+                Token right = factory.fromString(subSplit.getEnd_token());
+                Range<Token> range = new Range<>(left, right, partitioner);
+                List<Range<Token>> ranges = range.isWrapAround() ? range.unwrap() : ImmutableList.of(range);
+                for (Range<Token> subRange : ranges) {
                     TokenSplit split = new TokenSplit(factory.toString(subRange.left), factory.toString(subRange.right), endpoints);
 
                     splits.add(split);
@@ -146,9 +146,9 @@ public class CassandraTokenSplitManager
 
         public TokenSplit(String startToken, String endToken, List<String> hosts)
         {
-            this.startToken = checkNotNull(startToken, "startToken is null");
-            this.endToken = checkNotNull(endToken, "endToken is null");
-            this.hosts = ImmutableList.copyOf(checkNotNull(hosts, "hosts is null"));
+            this.startToken = requireNonNull(startToken, "startToken is null");
+            this.endToken = requireNonNull(endToken, "endToken is null");
+            this.hosts = ImmutableList.copyOf(requireNonNull(hosts, "hosts is null"));
         }
 
         public String getStartToken()

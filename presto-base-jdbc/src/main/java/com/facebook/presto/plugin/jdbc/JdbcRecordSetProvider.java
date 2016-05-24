@@ -15,6 +15,7 @@ package com.facebook.presto.plugin.jdbc;
 
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorRecordSetProvider;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.RecordSet;
 import com.google.common.collect.ImmutableList;
@@ -24,7 +25,7 @@ import javax.inject.Inject;
 import java.util.List;
 
 import static com.facebook.presto.plugin.jdbc.Types.checkType;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class JdbcRecordSetProvider
         implements ConnectorRecordSetProvider
@@ -34,11 +35,11 @@ public class JdbcRecordSetProvider
     @Inject
     public JdbcRecordSetProvider(JdbcClient jdbcClient)
     {
-        this.jdbcClient = checkNotNull(jdbcClient, "jdbcClient is null");
+        this.jdbcClient = requireNonNull(jdbcClient, "jdbcClient is null");
     }
 
     @Override
-    public RecordSet getRecordSet(ConnectorSplit split, List<? extends ColumnHandle> columns)
+    public RecordSet getRecordSet(ConnectorSession session, ConnectorSplit split, List<? extends ColumnHandle> columns)
     {
         JdbcSplit jdbcSplit = checkType(split, JdbcSplit.class, "split");
 

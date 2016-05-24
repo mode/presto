@@ -34,7 +34,7 @@ import static com.facebook.presto.spi.type.TimeZoneKey.getTimeZoneKeyForOffset;
 import static com.facebook.presto.spi.type.TimestampType.TIMESTAMP;
 import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
-import static java.util.Locale.ENGLISH;
+import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 
 public class TestTimeWithTimeZone
 {
@@ -47,13 +47,8 @@ public class TestTimeWithTimeZone
     @BeforeClass
     public void setUp()
     {
-        session = Session.builder()
-                .setUser("user")
-                .setSource("test")
-                .setCatalog("catalog")
-                .setSchema("schema")
+        session = testSessionBuilder()
                 .setTimeZoneKey(getTimeZoneKey("+06:09"))
-                .setLocale(ENGLISH)
                 .build();
 
         functionAssertions = new FunctionAssertions(session);

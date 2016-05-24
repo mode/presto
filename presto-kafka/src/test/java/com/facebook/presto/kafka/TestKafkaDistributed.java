@@ -68,12 +68,6 @@ public class TestKafkaDistributed
     }
 
     @Override
-    public void testCreateTableAsSelectSampled()
-            throws Exception
-    {
-    }
-
-    @Override
     public void testSymbolAliasing()
             throws Exception
     {
@@ -87,6 +81,20 @@ public class TestKafkaDistributed
     public void testView()
             throws Exception
     {
+    }
+
+    @Override
+    public void testCompatibleTypeChangeForView()
+            throws Exception
+    {
+        // Kafka connector currently does not support views
+    }
+
+    @Override
+    public void testCompatibleTypeChangeForView2()
+            throws Exception
+    {
+        // Kafka connector currently does not support views
     }
 
     @Override
@@ -115,12 +123,6 @@ public class TestKafkaDistributed
     {
     }
 
-    @Override
-    public void testDeleteSemiJoin()
-            throws Exception
-    {
-    }
-
     //
     // Kafka connector does not table rename.
     //
@@ -132,11 +134,21 @@ public class TestKafkaDistributed
     }
 
     //
-    // Kafka connector does not table column.
+    // Kafka connector does not rename column.
     //
 
     @Override
     public void testRenameColumn()
+            throws Exception
+    {
+    }
+
+    //
+    // Kafka connector does not add column.
+    //
+
+    @Override
+    public void testAddColumn()
             throws Exception
     {
     }

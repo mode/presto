@@ -14,17 +14,35 @@
 package com.facebook.presto.tests;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.spi.security.Identity;
 import com.facebook.presto.testing.MaterializedResult;
 import com.facebook.presto.testing.QueryRunner;
+import com.facebook.presto.testing.TestingSession;
+import com.google.common.collect.ImmutableList;
+import io.airlift.testing.Assertions;
 import org.intellij.lang.annotations.Language;
 import org.testng.annotations.Test;
 
+import java.util.List;
 import java.util.Optional;
 
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.SystemSessionProperties.QUERY_MAX_MEMORY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static org.testng.Assert.assertEquals;
+import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.ADD_COLUMN;
+import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.CREATE_TABLE;
+import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.CREATE_VIEW;
+import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.CREATE_VIEW_WITH_SELECT_TABLE;
+import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.CREATE_VIEW_WITH_SELECT_VIEW;
+import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.DROP_TABLE;
+import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.RENAME_COLUMN;
+import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.RENAME_TABLE;
+import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.SELECT_TABLE;
+import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.SELECT_VIEW;
+import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.SET_SESSION;
+import static com.facebook.presto.testing.TestingAccessControlManager.TestingPrivilegeType.SET_USER;
+import static com.facebook.presto.testing.TestingAccessControlManager.privilege;
+import static com.facebook.presto.tests.QueryAssertions.assertContains;
+import static java.util.Objects.requireNonNull;
 import static org.testng.Assert.assertTrue;
 
 public abstract class AbstractTestIntegrationSmokeTest
@@ -39,13 +57,13 @@ public abstract class AbstractTestIntegrationSmokeTest
 
     protected AbstractTestIntegrationSmokeTest(QueryRunner queryRunner, Session sampledSession)
     {
-        this(queryRunner, Optional.of(checkNotNull(sampledSession, "sampledSession is null")));
+        this(queryRunner, Optional.of(requireNonNull(sampledSession, "sampledSession is null")));
     }
 
     private AbstractTestIntegrationSmokeTest(QueryRunner queryRunner, Optional<Session> sampledSession)
     {
         super(queryRunner);
-        this.sampledSession = checkNotNull(sampledSession, "sampledSession is null");
+        this.sampledSession = requireNonNull(sampledSession, "sampledSession is null");
     }
 
     @Test
@@ -154,7 +172,7 @@ public abstract class AbstractTestIntegrationSmokeTest
             resultBuilder.row("tpch_sampled");
         }
 
-        assertTrue(actualSchemas.getMaterializedRows().containsAll(resultBuilder.build().getMaterializedRows()));
+        assertContains(actualSchemas, resultBuilder.build());
     }
 
     @Test
@@ -165,7 +183,7 @@ public abstract class AbstractTestIntegrationSmokeTest
         MaterializedResult expectedTables = MaterializedResult.resultBuilder(queryRunner.getDefaultSession(), VARCHAR)
                 .row("orders")
                 .build();
-        assertEquals(actualTables, expectedTables);
+        assertContains(actualTables, expectedTables);
     }
 
     @Test
@@ -174,13 +192,116 @@ public abstract class AbstractTestIntegrationSmokeTest
     {
         MaterializedResult actualColumns = computeActual("DESC ORDERS").toJdbcTypes();
 
-        // some connectors don't support dates, so test with both options
-        if (!actualColumns.equals(getExpectedTableDescription(true))) {
-            assertEquals(actualColumns, getExpectedTableDescription(false));
+        // some connectors don't support dates, and some do not support parametrized varchars, so we check multiple options
+        List<MaterializedResult> expectedColumnsPossibilities = ImmutableList.of(
+                getExpectedTableDescription(true, true),
+                getExpectedTableDescription(true, false),
+                getExpectedTableDescription(false, true),
+                getExpectedTableDescription(false, false)
+        );
+        assertTrue(expectedColumnsPossibilities.contains(actualColumns), String.format("%s not in %s", actualColumns, expectedColumnsPossibilities));
+    }
+
+    @Test
+    public void testNonQueryAccessControl()
+            throws Exception
+    {
+        assertAccessDenied("SET SESSION " + QUERY_MAX_MEMORY + " = '10MB'",
+                "Cannot set system session property "  + QUERY_MAX_MEMORY,
+                privilege(QUERY_MAX_MEMORY, SET_SESSION));
+
+        assertAccessDenied("CREATE TABLE foo (pk bigint)", "Cannot create table .*.foo.*", privilege("foo", CREATE_TABLE));
+        assertAccessDenied("DROP TABLE orders", "Cannot drop table .*.orders.*", privilege("orders", DROP_TABLE));
+        assertAccessDenied("ALTER TABLE orders RENAME TO foo", "Cannot rename table .*.orders.* to .*.foo.*", privilege("orders", RENAME_TABLE));
+        assertAccessDenied("ALTER TABLE orders ADD COLUMN foo bigint", "Cannot add a column to table .*.orders.*", privilege("orders", ADD_COLUMN));
+        assertAccessDenied("ALTER TABLE orders RENAME COLUMN orderkey TO foo", "Cannot rename a column in table .*.orders.*", privilege("orders", RENAME_COLUMN));
+        assertAccessDenied("CREATE VIEW foo as SELECT * FROM orders", "Cannot create view .*.foo.*", privilege("foo", CREATE_VIEW));
+        // todo add DROP VIEW test... not all connectors have view support
+
+        try {
+            assertAccessDenied("SELECT 1", "Principal .* cannot become user " + getSession().getUser() + ".*", privilege(getSession().getUser(), SET_USER));
+        }
+        catch (AssertionError e) {
+            // There is no clean exception message for authorization failure.  We simply get a 403
+            Assertions.assertContains(e.getMessage(), "statusCode=403");
         }
     }
 
-    private MaterializedResult getExpectedTableDescription(boolean dateSupported)
+    @Test
+    public void testViewAccessControl()
+            throws Exception
+    {
+        Session viewOwnerSession = TestingSession.testSessionBuilder()
+                .setIdentity(new Identity("test_view_access_owner", Optional.empty()))
+                .setCatalog(getSession().getCatalog().get())
+                .setSchema(getSession().getSchema().get())
+                .build();
+
+        // verify creation of view over a table requires special view creation privileges for the table
+        assertAccessDenied(
+                viewOwnerSession,
+                "CREATE VIEW test_view_access AS SELECT * FROM orders",
+                "Cannot select from table .*.orders.*",
+                privilege("orders", CREATE_VIEW_WITH_SELECT_TABLE));
+
+        // create the view
+        assertAccessAllowed(
+                viewOwnerSession,
+                "CREATE VIEW test_view_access AS SELECT * FROM orders",
+                privilege("bogus", "bogus privilege to disable security", SELECT_TABLE));
+
+        // verify selecting from a view over a table requires the view owner to have special view creation privileges for the table
+        assertAccessDenied(
+                "SELECT * FROM test_view_access",
+                "Cannot select from table .*.orders.*",
+                privilege(viewOwnerSession.getUser(), "orders", CREATE_VIEW_WITH_SELECT_TABLE));
+
+        // verify selecting from a view over a table does not require the session user to have SELECT privileges on the underlying table
+        assertAccessAllowed(
+                "SELECT * FROM test_view_access",
+                privilege(getSession().getUser(), "orders", CREATE_VIEW_WITH_SELECT_TABLE));
+        assertAccessAllowed(
+                "SELECT * FROM test_view_access",
+                privilege(getSession().getUser(), "orders", SELECT_TABLE));
+
+        Session nestedViewOwnerSession = TestingSession.testSessionBuilder()
+                .setIdentity(new Identity("test_nested_view_access_owner", Optional.empty()))
+                .setCatalog(getSession().getCatalog().get())
+                .setSchema(getSession().getSchema().get())
+                .build();
+
+        // verify creation of view over a view requires special view creation privileges for the view
+        assertAccessDenied(
+                nestedViewOwnerSession,
+                "CREATE VIEW test_nested_view_access AS SELECT * FROM test_view_access",
+                "Cannot select from view .*.test_view_access.*",
+                privilege("test_view_access", CREATE_VIEW_WITH_SELECT_VIEW));
+
+        // create the nested view
+        assertAccessAllowed(
+                nestedViewOwnerSession,
+                "CREATE VIEW test_nested_view_access AS SELECT * FROM test_view_access",
+                privilege("bogus", "bogus privilege to disable security", SELECT_TABLE));
+
+        // verify selecting from a view over a view requires the view owner of the outer view to have special view creation privileges for the inner view
+        assertAccessDenied(
+                "SELECT * FROM test_nested_view_access",
+                "Cannot select from view .*.test_view_access.*",
+                privilege(nestedViewOwnerSession.getUser(), "test_view_access", CREATE_VIEW_WITH_SELECT_VIEW));
+
+        // verify selecting from a view over a view does not require the session user to have SELECT privileges for the inner view
+        assertAccessAllowed(
+                "SELECT * FROM test_nested_view_access",
+                privilege(getSession().getUser(), "test_view_access", CREATE_VIEW_WITH_SELECT_VIEW));
+        assertAccessAllowed(
+                "SELECT * FROM test_nested_view_access",
+                privilege(getSession().getUser(), "test_view_access", SELECT_VIEW));
+
+        assertAccessAllowed(nestedViewOwnerSession, "DROP VIEW test_nested_view_access");
+        assertAccessAllowed(viewOwnerSession, "DROP VIEW test_view_access");
+    }
+
+    private MaterializedResult getExpectedTableDescription(boolean dateSupported, boolean parametrizedVarchar)
     {
         String orderDateType;
         if (dateSupported) {
@@ -189,17 +310,32 @@ public abstract class AbstractTestIntegrationSmokeTest
         else {
             orderDateType = "varchar";
         }
-        return MaterializedResult.resultBuilder(queryRunner.getDefaultSession(), VARCHAR, VARCHAR, BOOLEAN, BOOLEAN, VARCHAR)
-                    .row("orderkey", "bigint", true, false, "")
-                    .row("custkey", "bigint", true, false, "")
-                    .row("orderstatus", "varchar", true, false, "")
-                    .row("totalprice", "double", true, false, "")
-                    .row("orderdate", orderDateType, true, false, "")
-                    .row("orderpriority", "varchar", true, false, "")
-                    .row("clerk", "varchar", true, false, "")
-                    .row("shippriority", "bigint", true, false, "")
-                    .row("comment", "varchar", true, false, "")
+        if (parametrizedVarchar) {
+            return MaterializedResult.resultBuilder(queryRunner.getDefaultSession(), VARCHAR, VARCHAR, VARCHAR)
+                    .row("orderkey", "bigint", "")
+                    .row("custkey", "bigint", "")
+                    .row("orderstatus", "varchar", "")
+                    .row("totalprice", "double", "")
+                    .row("orderdate", orderDateType, "")
+                    .row("orderpriority", "varchar", "")
+                    .row("clerk", "varchar", "")
+                    .row("shippriority", "integer", "")
+                    .row("comment", "varchar", "")
                     .build();
+        }
+        else {
+            return MaterializedResult.resultBuilder(queryRunner.getDefaultSession(), VARCHAR, VARCHAR, VARCHAR)
+                    .row("orderkey", "bigint", "")
+                    .row("custkey", "bigint", "")
+                    .row("orderstatus", "varchar(1)", "")
+                    .row("totalprice", "double", "")
+                    .row("orderdate", orderDateType, "")
+                    .row("orderpriority", "varchar(15)", "")
+                    .row("clerk", "varchar(15)", "")
+                    .row("shippriority", "integer", "")
+                    .row("comment", "varchar(79)", "")
+                    .build();
+        }
     }
 
     protected void assertApproximateQuery(@Language("SQL") String actual, @Language("SQL") String expected)

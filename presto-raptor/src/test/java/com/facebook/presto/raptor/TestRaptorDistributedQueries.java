@@ -13,18 +13,25 @@
  */
 package com.facebook.presto.raptor;
 
+import com.facebook.presto.testing.QueryRunner;
 import com.facebook.presto.tests.AbstractTestDistributedQueries;
+import com.google.common.collect.ImmutableMap;
 
 import static com.facebook.presto.raptor.RaptorQueryRunner.createRaptorQueryRunner;
 import static com.facebook.presto.raptor.RaptorQueryRunner.createSampledSession;
-import static io.airlift.tpch.TpchTable.getTables;
 
 public class TestRaptorDistributedQueries
         extends AbstractTestDistributedQueries
 {
+    @SuppressWarnings("unused")
     public TestRaptorDistributedQueries()
             throws Exception
     {
-        super(createRaptorQueryRunner(getTables()), createSampledSession());
+        this(createRaptorQueryRunner(ImmutableMap.of(), true, false));
+    }
+
+    protected TestRaptorDistributedQueries(QueryRunner queryRunner)
+    {
+        super(queryRunner, createSampledSession());
     }
 }

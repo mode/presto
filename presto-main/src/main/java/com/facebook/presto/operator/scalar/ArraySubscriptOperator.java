@@ -13,110 +13,143 @@
  */
 package com.facebook.presto.operator.scalar;
 
-import com.facebook.presto.metadata.FunctionInfo;
+import com.facebook.presto.annotation.UsedByGeneratedCode;
+import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.ParametricOperator;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.SqlOperator;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.primitives.Ints;
 import io.airlift.slice.Slice;
 
 import java.lang.invoke.MethodHandle;
-import java.util.Map;
 
 import static com.facebook.presto.metadata.OperatorType.SUBSCRIPT;
-import static com.facebook.presto.metadata.Signature.typeParameter;
+import static com.facebook.presto.metadata.Signature.typeVariable;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
-import static com.facebook.presto.type.TypeUtils.readStructuralBlock;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
 import static com.facebook.presto.util.Reflection.methodHandle;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class ArraySubscriptOperator
-        extends ParametricOperator
+        extends SqlOperator
 {
     public static final ArraySubscriptOperator ARRAY_SUBSCRIPT = new ArraySubscriptOperator();
 
-    private static final Map<Class<?>, MethodHandle> METHOD_HANDLES = ImmutableMap.<Class<?>, MethodHandle>builder()
-            .put(boolean.class, methodHandle(ArraySubscriptOperator.class, "booleanSubscript", Type.class, Slice.class, long.class))
-            .put(long.class, methodHandle(ArraySubscriptOperator.class, "longSubscript", Type.class, Slice.class, long.class))
-            .put(void.class, methodHandle(ArraySubscriptOperator.class, "arrayWithUnknownType", Type.class, Slice.class, long.class))
-            .put(double.class, methodHandle(ArraySubscriptOperator.class, "doubleSubscript", Type.class, Slice.class, long.class))
-            .put(Slice.class, methodHandle(ArraySubscriptOperator.class, "sliceSubscript", Type.class, Slice.class, long.class))
-            .build();
+    private static final MethodHandle METHOD_HANDLE_UNKNOWN = methodHandle(ArraySubscriptOperator.class, "arrayWithUnknownType", Type.class, Block.class, long.class);
+    private static final MethodHandle METHOD_HANDLE_BOOLEAN = methodHandle(ArraySubscriptOperator.class, "booleanSubscript", Type.class, Block.class, long.class);
+    private static final MethodHandle METHOD_HANDLE_LONG = methodHandle(ArraySubscriptOperator.class, "longSubscript", Type.class, Block.class, long.class);
+    private static final MethodHandle METHOD_HANDLE_DOUBLE = methodHandle(ArraySubscriptOperator.class, "doubleSubscript", Type.class, Block.class, long.class);
+    private static final MethodHandle METHOD_HANDLE_SLICE = methodHandle(ArraySubscriptOperator.class, "sliceSubscript", Type.class, Block.class, long.class);
+    private static final MethodHandle METHOD_HANDLE_OBJECT = methodHandle(ArraySubscriptOperator.class, "objectSubscript", Type.class, Block.class, long.class);
 
     protected ArraySubscriptOperator()
     {
-        super(SUBSCRIPT, ImmutableList.of(typeParameter("E")), "E", ImmutableList.of("array<E>", "bigint"));
+        super(SUBSCRIPT,
+                ImmutableList.of(typeVariable("E")),
+                ImmutableList.of(),
+                parseTypeSignature("E"),
+                ImmutableList.of(parseTypeSignature("array(E)"), parseTypeSignature("bigint")));
     }
 
     @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
-        checkArgument(types.size() == 1, "Expected one type, got %s", types);
-        Type elementType = types.get("E");
+        checkArgument(boundVariables.getTypeVariables().size() == 1, "Expected one type, got %s", boundVariables.getTypeVariables());
+        Type elementType = boundVariables.getTypeVariable("E");
 
-        MethodHandle methodHandle = METHOD_HANDLES.get(elementType.getJavaType());
+        MethodHandle methodHandle;
+        if (elementType.getJavaType() == void.class) {
+            methodHandle = METHOD_HANDLE_UNKNOWN;
+        }
+        else if (elementType.getJavaType() == boolean.class) {
+            methodHandle = METHOD_HANDLE_BOOLEAN;
+        }
+        else if (elementType.getJavaType() == long.class) {
+            methodHandle = METHOD_HANDLE_LONG;
+        }
+        else if (elementType.getJavaType() == double.class) {
+            methodHandle = METHOD_HANDLE_DOUBLE;
+        }
+        else if (elementType.getJavaType() == Slice.class) {
+            methodHandle = METHOD_HANDLE_SLICE;
+        }
+        else {
+            methodHandle = METHOD_HANDLE_OBJECT;
+        }
         methodHandle = methodHandle.bindTo(elementType);
-        checkNotNull(methodHandle, "methodHandle is null");
-        return new FunctionInfo(Signature.internalOperator(SUBSCRIPT.name(), elementType.getTypeSignature(), parameterizedTypeName("array", elementType.getTypeSignature()), parseTypeSignature(StandardTypes.BIGINT)), "Array subscript", true, methodHandle, true, true, ImmutableList.of(false, false));
+        requireNonNull(methodHandle, "methodHandle is null");
+        return new ScalarFunctionImplementation(true, ImmutableList.of(false, false), methodHandle, isDeterministic());
     }
 
-    public static void arrayWithUnknownType(Type elementType, Slice array, long index)
+    @UsedByGeneratedCode
+    public static void arrayWithUnknownType(Type elementType, Block array, long index)
     {
-        readBlockAndCheckIndex(array, index);
+        checkIndex(array, index);
     }
 
-    public static Long longSubscript(Type elementType, Slice array, long index)
+    @UsedByGeneratedCode
+    public static Long longSubscript(Type elementType, Block array, long index)
     {
-        Block block = readBlockAndCheckIndex(array, index);
+        checkIndex(array, index);
         int position = Ints.checkedCast(index - 1);
-        if (block.isNull(position)) {
+        if (array.isNull(position)) {
             return null;
         }
 
-        return elementType.getLong(block, position);
+        return elementType.getLong(array, position);
     }
 
-    public static Boolean booleanSubscript(Type elementType, Slice array, long index)
+    @UsedByGeneratedCode
+    public static Boolean booleanSubscript(Type elementType, Block array, long index)
     {
-        Block block = readBlockAndCheckIndex(array, index);
+        checkIndex(array, index);
         int position = Ints.checkedCast(index - 1);
-        if (block.isNull(position)) {
+        if (array.isNull(position)) {
             return null;
         }
 
-        return elementType.getBoolean(block, position);
+        return elementType.getBoolean(array, position);
     }
 
-    public static Double doubleSubscript(Type elementType, Slice array, long index)
+    @UsedByGeneratedCode
+    public static Double doubleSubscript(Type elementType, Block array, long index)
     {
-        Block block = readBlockAndCheckIndex(array, index);
+        checkIndex(array, index);
         int position = Ints.checkedCast(index - 1);
-        if (block.isNull(position)) {
+        if (array.isNull(position)) {
             return null;
         }
 
-        return elementType.getDouble(block, position);
+        return elementType.getDouble(array, position);
     }
 
-    public static Slice sliceSubscript(Type elementType, Slice array, long index)
+    @UsedByGeneratedCode
+    public static Slice sliceSubscript(Type elementType, Block array, long index)
     {
-        Block block = readBlockAndCheckIndex(array, index);
+        checkIndex(array, index);
         int position = Ints.checkedCast(index - 1);
-        if (block.isNull(position)) {
+        if (array.isNull(position)) {
             return null;
         }
 
-        return elementType.getSlice(block, position);
+        return elementType.getSlice(array, position);
+    }
+
+    @UsedByGeneratedCode
+    public static Object objectSubscript(Type elementType, Block array, long index)
+    {
+        checkIndex(array, index);
+        int position = Ints.checkedCast(index - 1);
+        if (array.isNull(position)) {
+            return null;
+        }
+
+        return elementType.getObject(array, position);
     }
 
     public static void checkArrayIndex(long index)
@@ -129,13 +162,11 @@ public class ArraySubscriptOperator
         }
     }
 
-    public static Block readBlockAndCheckIndex(Slice array, long index)
+    public static void checkIndex(Block array, long index)
     {
         checkArrayIndex(index);
-        Block block = readStructuralBlock(array);
-        if (index > block.getPositionCount()) {
+        if (index > array.getPositionCount()) {
             throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Array subscript out of bounds");
         }
-        return block;
     }
 }

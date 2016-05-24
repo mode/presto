@@ -13,74 +13,36 @@
  */
 package com.facebook.presto.operator.scalar;
 
-import com.facebook.presto.metadata.FunctionInfo;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.ParametricScalar;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.operator.Description;
+import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.VariableWidthBlockBuilder;
+import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.spi.type.TypeSignature;
+import com.facebook.presto.type.SqlType;
 import com.google.common.collect.ImmutableList;
-import io.airlift.slice.Slice;
 import it.unimi.dsi.fastutil.ints.AbstractIntComparator;
 import it.unimi.dsi.fastutil.ints.IntArrays;
 import it.unimi.dsi.fastutil.ints.IntComparator;
 
 import java.lang.invoke.MethodHandle;
-import java.util.Map;
 
-import static com.facebook.presto.metadata.Signature.orderableTypeParameter;
-import static com.facebook.presto.type.TypeUtils.buildStructuralSlice;
-import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
-import static com.facebook.presto.type.TypeUtils.readStructuralBlock;
-import static com.facebook.presto.util.Reflection.methodHandle;
-import static com.google.common.base.Preconditions.checkArgument;
-import static java.lang.String.format;
+import static com.facebook.presto.metadata.OperatorType.LESS_THAN;
 
+@ScalarFunction("array_intersect")
+@Description("Intersects elements of the two given arrays")
 public final class ArrayIntersectFunction
-        extends ParametricScalar
 {
-    public static final ArrayIntersectFunction ARRAY_INTERSECT_FUNCTION = new ArrayIntersectFunction();
-    private static final String FUNCTION_NAME = "array_intersect";
-    private static final Signature SIGNATURE = new Signature(FUNCTION_NAME, ImmutableList.of(orderableTypeParameter("E")), "array<E>", ImmutableList.of("array<E>", "array<E>"), false, false);
-    private static final MethodHandle METHOD_HANDLE = methodHandle(ArrayIntersectFunction.class, "intersect", Type.class, Slice.class, Slice.class);
+    private static final int INITIAL_SIZE = 128;
 
-    @Override
-    public Signature getSignature()
-    {
-        return SIGNATURE;
-    }
+    private int[] leftPositions = new int[INITIAL_SIZE];
+    private int[] rightPositions = new int[INITIAL_SIZE];
+    private final PageBuilder pageBuilder;
 
-    @Override
-    public boolean isHidden()
+    @TypeParameter("E")
+    public ArrayIntersectFunction(@TypeParameter("E") Type elementType)
     {
-        return false;
-    }
-
-    @Override
-    public boolean isDeterministic()
-    {
-        return true;
-    }
-
-    @Override
-    public String getDescription()
-    {
-        return "Intersects elements of the two given arrays";
-    }
-
-    @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
-    {
-        checkArgument(types.size() == 1, format("%s expects only one argument", FUNCTION_NAME));
-        TypeSignature typeSignature = parameterizedTypeName("array", types.get("E").getTypeSignature());
-        MethodHandle methodHandle = METHOD_HANDLE.bindTo(types.get("E"));
-        Signature signature = new Signature(FUNCTION_NAME, typeSignature, typeSignature, typeSignature);
-        return new FunctionInfo(signature, getDescription(), isHidden(), methodHandle, isDeterministic(), false, ImmutableList.of(false, false));
+        pageBuilder = new PageBuilder(ImmutableList.of(elementType));
     }
 
     private static IntComparator IntBlockCompare(Type type, Block block)
@@ -104,16 +66,35 @@ public final class ArrayIntersectFunction
         };
     }
 
-    public static Slice intersect(Type type, Slice leftArray, Slice rightArray)
+    @TypeParameter("E")
+    @SqlType("array(E)")
+    public Block intersect(
+            @OperatorDependency(operator = LESS_THAN, returnType = StandardTypes.BOOLEAN, argumentTypes = {"E", "E"}) MethodHandle lessThanFunction,
+            @TypeParameter("E") Type type,
+            @SqlType("array(E)") Block leftArray,
+            @SqlType("array(E)") Block rightArray)
     {
-        Block leftBlock = readStructuralBlock(leftArray);
-        Block rightBlock = readStructuralBlock(rightArray);
+        int leftPositionCount = leftArray.getPositionCount();
+        int rightPositionCount = rightArray.getPositionCount();
 
-        int leftPositionCount = leftBlock.getPositionCount();
-        int rightPositionCount = rightBlock.getPositionCount();
+        if (leftPositionCount == 0) {
+            return leftArray;
+        }
+        if (rightPositionCount == 0) {
+            return rightArray;
+        }
 
-        int[] leftPositions = new int[leftPositionCount];
-        int[] rightPositions = new int[rightPositionCount];
+        if (leftPositions.length < leftPositionCount) {
+            leftPositions = new int[leftPositionCount];
+        }
+
+        if (rightPositions.length < rightPositionCount) {
+            rightPositions = new int[rightPositionCount];
+        }
+
+        if (pageBuilder.isFull()) {
+            pageBuilder.reset();
+        }
 
         for (int i = 0; i < leftPositionCount; i++) {
             leftPositions[i] = i;
@@ -121,20 +102,21 @@ public final class ArrayIntersectFunction
         for (int i = 0; i < rightPositionCount; i++) {
             rightPositions[i] = i;
         }
-        IntArrays.quickSort(leftPositions, IntBlockCompare(type, leftBlock));
-        IntArrays.quickSort(rightPositions, IntBlockCompare(type, rightBlock));
+        IntArrays.quickSort(leftPositions, 0, leftPositionCount, IntBlockCompare(type, leftArray));
+        IntArrays.quickSort(rightPositions, 0, rightPositionCount, IntBlockCompare(type, rightArray));
 
-        BlockBuilder resultBlockBuilder = new VariableWidthBlockBuilder(new BlockBuilderStatus(), leftBlock.getSizeInBytes());
+        BlockBuilder resultBlockBuilder = pageBuilder.getBlockBuilder(0);
 
         int leftCurrentPosition = 0;
         int rightCurrentPosition = 0;
         int leftBasePosition;
         int rightBasePosition;
+        int totalCount = 0;
 
         while (leftCurrentPosition < leftPositionCount && rightCurrentPosition < rightPositionCount) {
             leftBasePosition = leftCurrentPosition;
             rightBasePosition = rightCurrentPosition;
-            int compareValue = type.compareTo(leftBlock, leftPositions[leftCurrentPosition], rightBlock, rightPositions[rightCurrentPosition]);
+            int compareValue = type.compareTo(leftArray, leftPositions[leftCurrentPosition], rightArray, rightPositions[rightCurrentPosition]);
             if (compareValue > 0) {
                 rightCurrentPosition++;
             }
@@ -142,18 +124,19 @@ public final class ArrayIntersectFunction
                 leftCurrentPosition++;
             }
             else {
-                type.appendTo(leftBlock, leftPositions[leftCurrentPosition], resultBlockBuilder);
+                type.appendTo(leftArray, leftPositions[leftCurrentPosition], resultBlockBuilder);
                 leftCurrentPosition++;
                 rightCurrentPosition++;
-                while (leftCurrentPosition < leftPositionCount && type.equalTo(leftBlock, leftPositions[leftBasePosition], leftBlock, leftPositions[leftCurrentPosition])) {
+                totalCount++;
+                while (leftCurrentPosition < leftPositionCount && type.equalTo(leftArray, leftPositions[leftBasePosition], leftArray, leftPositions[leftCurrentPosition])) {
                     leftCurrentPosition++;
                 }
-                while (rightCurrentPosition < rightPositionCount && type.equalTo(rightBlock, rightPositions[rightBasePosition], rightBlock, rightPositions[rightCurrentPosition])) {
+                while (rightCurrentPosition < rightPositionCount && type.equalTo(rightArray, rightPositions[rightBasePosition], rightArray, rightPositions[rightCurrentPosition])) {
                     rightCurrentPosition++;
                 }
             }
         }
-
-        return buildStructuralSlice(resultBlockBuilder);
+        pageBuilder.declarePositions(totalCount);
+        return resultBlockBuilder.getRegion(resultBlockBuilder.getPositionCount() - totalCount, totalCount);
     }
 }

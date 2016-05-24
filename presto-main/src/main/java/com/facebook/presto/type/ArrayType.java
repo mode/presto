@@ -13,56 +13,41 @@
  */
 package com.facebook.presto.type;
 
+import com.facebook.presto.operator.scalar.CombineHashFunction;
 import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.block.ArrayBlockBuilder;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.VariableWidthBlockBuilder;
-import com.facebook.presto.spi.type.AbstractVariableWidthType;
+import com.facebook.presto.spi.type.AbstractType;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Lists;
 import io.airlift.slice.Slice;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Objects;
 
-import static com.facebook.presto.type.TypeUtils.appendToBlockBuilder;
-import static com.facebook.presto.type.TypeUtils.buildStructuralSlice;
+import static com.facebook.presto.spi.type.StandardTypes.ARRAY;
 import static com.facebook.presto.type.TypeUtils.checkElementNotNull;
 import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
-import static com.facebook.presto.type.TypeUtils.readStructuralBlock;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class ArrayType
-        extends AbstractVariableWidthType
+        extends AbstractType
 {
     private final Type elementType;
     public static final String ARRAY_NULL_ELEMENT_MSG = "ARRAY comparison not supported for arrays with null elements";
 
     public ArrayType(Type elementType)
     {
-        super(parameterizedTypeName("array", elementType.getTypeSignature()), Slice.class);
-        this.elementType = checkNotNull(elementType, "elementType is null");
+        super(parameterizedTypeName(ARRAY, elementType.getTypeSignature()), Block.class);
+        this.elementType = requireNonNull(elementType, "elementType is null");
     }
 
     public Type getElementType()
     {
         return elementType;
-    }
-
-    /**
-     * Takes a list of stack types and converts them to the stack representation of an array
-     */
-    public static Slice toStackRepresentation(List<?> values, Type elementType)
-    {
-        BlockBuilder blockBuilder = new VariableWidthBlockBuilder(new BlockBuilderStatus(), 0);
-        for (Object element : values) {
-            appendToBlockBuilder(elementType, element, blockBuilder);
-        }
-        return buildStructuralSlice(blockBuilder);
     }
 
     @Override
@@ -80,29 +65,45 @@ public class ArrayType
     @Override
     public boolean equalTo(Block leftBlock, int leftPosition, Block rightBlock, int rightPosition)
     {
-        return compareTo(leftBlock, leftPosition, rightBlock, rightPosition) == 0;
+        Block leftArray = leftBlock.getObject(leftPosition, Block.class);
+        Block rightArray = rightBlock.getObject(rightPosition, Block.class);
+
+        if (leftArray.getPositionCount() != rightArray.getPositionCount()) {
+            return false;
+        }
+
+        for (int i = 0; i < leftArray.getPositionCount(); i++) {
+            checkElementNotNull(leftArray.isNull(i), ARRAY_NULL_ELEMENT_MSG);
+            checkElementNotNull(rightArray.isNull(i), ARRAY_NULL_ELEMENT_MSG);
+            if (!elementType.equalTo(leftArray, i, rightArray, i)) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     @Override
-    public int hash(Block block, int position)
+    public long hash(Block block, int position)
     {
-        Slice value = getSlice(block, position);
-        Block array = readStructuralBlock(value);
-        List<Integer> hashArray = new ArrayList<>(array.getPositionCount());
+        Block array = getObject(block, position);
+        int hash = 0;
         for (int i = 0; i < array.getPositionCount(); i++) {
             checkElementNotNull(array.isNull(i), ARRAY_NULL_ELEMENT_MSG);
-            hashArray.add(elementType.hash(array, i));
+            hash = (int) CombineHashFunction.getHash(hash, elementType.hash(array, i));
         }
-        return Objects.hash(hashArray);
+        return hash;
     }
 
     @Override
     public int compareTo(Block leftBlock, int leftPosition, Block rightBlock, int rightPosition)
     {
-        Slice leftSlice = getSlice(leftBlock, leftPosition);
-        Slice rightSlice = getSlice(rightBlock, rightPosition);
-        Block leftArray = readStructuralBlock(leftSlice);
-        Block rightArray = readStructuralBlock(rightSlice);
+        if (!elementType.isOrderable()) {
+            throw new UnsupportedOperationException(getTypeSignature() + " type is not orderable");
+        }
+
+        Block leftArray = leftBlock.getObject(leftPosition, Block.class);
+        Block rightArray = rightBlock.getObject(rightPosition, Block.class);
 
         int len = Math.min(leftArray.getPositionCount(), rightArray.getPositionCount());
         int index = 0;
@@ -130,9 +131,9 @@ public class ArrayType
             return null;
         }
 
-        Slice slice = block.getSlice(position, 0, block.getLength(position));
-        Block arrayBlock = readStructuralBlock(slice);
-        List<Object> values = Lists.newArrayListWithCapacity(arrayBlock.getPositionCount());
+        Block arrayBlock = block.getObject(position, Block.class);
+
+        List<Object> values = new ArrayList<>(arrayBlock.getPositionCount());
 
         for (int i = 0; i < arrayBlock.getPositionCount(); i++) {
             values.add(elementType.getObjectValue(session, arrayBlock, i));
@@ -148,7 +149,7 @@ public class ArrayType
             blockBuilder.appendNull();
         }
         else {
-            block.writeBytesTo(position, 0, block.getLength(position), blockBuilder);
+            block.writePositionTo(position, blockBuilder);
             blockBuilder.closeEntry();
         }
     }
@@ -172,6 +173,30 @@ public class ArrayType
     }
 
     @Override
+    public Block getObject(Block block, int position)
+    {
+        return block.getObject(position, Block.class);
+    }
+
+    @Override
+    public void writeObject(BlockBuilder blockBuilder, Object value)
+    {
+        blockBuilder.writeObject(value).closeEntry();
+    }
+
+    @Override
+    public BlockBuilder createBlockBuilder(BlockBuilderStatus blockBuilderStatus, int expectedEntries, int expectedBytesPerEntry)
+    {
+        return new ArrayBlockBuilder(elementType, blockBuilderStatus, expectedEntries, expectedBytesPerEntry);
+    }
+
+    @Override
+    public BlockBuilder createBlockBuilder(BlockBuilderStatus blockBuilderStatus, int expectedEntries)
+    {
+        return createBlockBuilder(blockBuilderStatus, expectedEntries, 100);
+    }
+
+    @Override
     public List<Type> getTypeParameters()
     {
         return ImmutableList.of(getElementType());
@@ -180,6 +205,6 @@ public class ArrayType
     @Override
     public String getDisplayName()
     {
-        return "array<" + elementType.getDisplayName() + ">";
+        return ARRAY + "(" + elementType.getDisplayName() + ")";
     }
 }

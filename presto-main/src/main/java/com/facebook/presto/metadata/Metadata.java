@@ -18,6 +18,8 @@ import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ColumnMetadata;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.block.BlockEncodingSerde;
+import com.facebook.presto.spi.predicate.TupleDomain;
+import com.facebook.presto.spi.security.Privilege;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
@@ -30,26 +32,21 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 
 public interface Metadata
 {
+    void verifyComparableOrderableContract();
+
     Type getType(TypeSignature signature);
-
-    FunctionInfo resolveFunction(QualifiedName name, List<TypeSignature> parameterTypes, boolean approximate);
-
-    @NotNull
-    FunctionInfo getExactFunction(Signature handle);
 
     boolean isAggregationFunction(QualifiedName name);
 
     @NotNull
-    List<ParametricFunction> listFunctions();
+    List<SqlFunction> listFunctions();
 
-    void addFunctions(List<? extends ParametricFunction> functions);
-
-    FunctionInfo resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
-            throws OperatorNotFoundException;
+    void addFunctions(List<? extends SqlFunction> functions);
 
     @NotNull
     List<String> listSchemaNames(Session session, String catalogName);
@@ -58,13 +55,13 @@ public interface Metadata
      * Returns a table handle for the specified table name.
      */
     @NotNull
-    Optional<TableHandle> getTableHandle(Session session, QualifiedTableName tableName);
+    Optional<TableHandle> getTableHandle(Session session, QualifiedObjectName tableName);
 
     @NotNull
-    List<TableLayoutResult> getLayouts(TableHandle tableHandle, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns);
+    List<TableLayoutResult> getLayouts(Session session, TableHandle tableHandle, Constraint<ColumnHandle> constraint, Optional<Set<ColumnHandle>> desiredColumns);
 
     @NotNull
-    TableLayout getLayout(TableLayoutHandle handle);
+    TableLayout getLayout(Session session, TableLayoutHandle handle);
 
     /**
      * Return the metadata for the specified table handle.
@@ -72,13 +69,13 @@ public interface Metadata
      * @throws RuntimeException if table handle is no longer valid
      */
     @NotNull
-    TableMetadata getTableMetadata(TableHandle tableHandle);
+    TableMetadata getTableMetadata(Session session, TableHandle tableHandle);
 
     /**
      * Get the names that match the specified table prefix (never null).
      */
     @NotNull
-    List<QualifiedTableName> listTables(Session session, QualifiedTablePrefix prefix);
+    List<QualifiedObjectName> listTables(Session session, QualifiedTablePrefix prefix);
 
     /**
      * Returns the handle for the sample weight column.
@@ -86,7 +83,7 @@ public interface Metadata
      * @throws RuntimeException if the table handle is no longer valid
      */
     @NotNull
-    Optional<ColumnHandle> getSampleWeightColumnHandle(TableHandle tableHandle);
+    Optional<ColumnHandle> getSampleWeightColumnHandle(Session session, TableHandle tableHandle);
 
     /**
      * Returns true iff this catalog supports creation of sampled tables
@@ -100,7 +97,7 @@ public interface Metadata
      * @throws RuntimeException if table handle is no longer valid
      */
     @NotNull
-    Map<String, ColumnHandle> getColumnHandles(TableHandle tableHandle);
+    Map<String, ColumnHandle> getColumnHandles(Session session, TableHandle tableHandle);
 
     /**
      * Gets the metadata for the specified table column.
@@ -108,13 +105,13 @@ public interface Metadata
      * @throws RuntimeException if table or column handles are no longer valid
      */
     @NotNull
-    ColumnMetadata getColumnMetadata(TableHandle tableHandle, ColumnHandle columnHandle);
+    ColumnMetadata getColumnMetadata(Session session, TableHandle tableHandle, ColumnHandle columnHandle);
 
     /**
      * Gets the metadata for all columns that match the specified table prefix.
      */
     @NotNull
-    Map<QualifiedTableName, List<ColumnMetadata>> listTableColumns(Session session, QualifiedTablePrefix prefix);
+    Map<QualifiedObjectName, List<ColumnMetadata>> listTableColumns(Session session, QualifiedTablePrefix prefix);
 
     /**
      * Creates a table using the specified table metadata.
@@ -125,34 +122,38 @@ public interface Metadata
     /**
      * Rename the specified table.
      */
-    void renameTable(TableHandle tableHandle, QualifiedTableName newTableName);
+    void renameTable(Session session, TableHandle tableHandle, QualifiedObjectName newTableName);
 
     /**
      * Rename the specified column.
      */
-    void renameColumn(TableHandle tableHandle, ColumnHandle source, String target);
+    void renameColumn(Session session, TableHandle tableHandle, ColumnHandle source, String target);
+
+    /**
+     * Add the specified column to the table.
+     */
+    void addColumn(Session session, TableHandle tableHandle, ColumnMetadata column);
 
     /**
      * Drops the specified table
      *
      * @throws RuntimeException if the table can not be dropped or table handle is no longer valid
      */
-    void dropTable(TableHandle tableHandle);
+    void dropTable(Session session, TableHandle tableHandle);
+
+    Optional<NewTableLayout> getNewTableLayout(Session session, String catalogName, TableMetadata tableMetadata);
 
     /**
      * Begin the atomic creation of a table with data.
      */
-    OutputTableHandle beginCreateTable(Session session, String catalogName, TableMetadata tableMetadata);
+    OutputTableHandle beginCreateTable(Session session, String catalogName, TableMetadata tableMetadata, Optional<NewTableLayout> layout);
 
     /**
-     * Commit a table creation with data after the data is written.
+     * Finish a table creation with data after the data is written.
      */
-    void commitCreateTable(OutputTableHandle tableHandle, Collection<Slice> fragments);
+    void finishCreateTable(Session session, OutputTableHandle tableHandle, Collection<Slice> fragments);
 
-    /**
-     * Rollback a table creation
-     */
-    void rollbackCreateTable(OutputTableHandle tableHandle);
+    Optional<NewTableLayout> getInsertLayout(Session session, TableHandle target);
 
     /**
      * Begin insert query
@@ -160,19 +161,26 @@ public interface Metadata
     InsertTableHandle beginInsert(Session session, TableHandle tableHandle);
 
     /**
-     * Commit insert query
+     * Finish insert query
      */
-    void commitInsert(InsertTableHandle tableHandle, Collection<Slice> fragments);
-
-    /**
-     * Rollback insert query
-     */
-    void rollbackInsert(InsertTableHandle tableHandle);
+    void finishInsert(Session session, InsertTableHandle tableHandle, Collection<Slice> fragments);
 
     /**
      * Get the row ID column handle used with UpdatablePageSource.
      */
-    ColumnHandle getUpdateRowIdColumnHandle(TableHandle tableHandle);
+    ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle);
+
+    /**
+     * @return whether delete without table scan is supported
+     */
+    boolean supportsMetadataDelete(Session session, TableHandle tableHandle, TableLayoutHandle tableLayoutHandle);
+
+    /**
+     * Delete the provide table layout
+     *
+     * @return number of rows deleted, or empty for unknown
+     */
+    OptionalLong metadataDelete(Session session, TableHandle tableHandle, TableLayoutHandle tableLayoutHandle);
 
     /**
      * Begin delete query
@@ -180,14 +188,9 @@ public interface Metadata
     TableHandle beginDelete(Session session, TableHandle tableHandle);
 
     /**
-     * Commit delete query
+     * Finish delete query
      */
-    void commitDelete(TableHandle tableHandle, Collection<Slice> fragments);
-
-    /**
-     * Rollback delete query
-     */
-    void rollbackDelete(TableHandle tableHandle);
+    void finishDelete(Session session, TableHandle tableHandle, Collection<Slice> fragments);
 
     /**
      * Gets all the loaded catalogs
@@ -201,33 +204,54 @@ public interface Metadata
      * Get the names that match the specified table prefix (never null).
      */
     @NotNull
-    List<QualifiedTableName> listViews(Session session, QualifiedTablePrefix prefix);
+    List<QualifiedObjectName> listViews(Session session, QualifiedTablePrefix prefix);
 
     /**
      * Get the view definitions that match the specified table prefix (never null).
      */
     @NotNull
-    Map<QualifiedTableName, ViewDefinition> getViews(Session session, QualifiedTablePrefix prefix);
+    Map<QualifiedObjectName, ViewDefinition> getViews(Session session, QualifiedTablePrefix prefix);
 
     /**
      * Returns the view definition for the specified view name.
      */
     @NotNull
-    Optional<ViewDefinition> getView(Session session, QualifiedTableName viewName);
+    Optional<ViewDefinition> getView(Session session, QualifiedObjectName viewName);
 
     /**
      * Creates the specified view with the specified view definition.
      */
-    void createView(Session session, QualifiedTableName viewName, String viewData, boolean replace);
+    void createView(Session session, QualifiedObjectName viewName, String viewData, boolean replace);
 
     /**
      * Drops the specified view.
      */
-    void dropView(Session session, QualifiedTableName viewName);
+    void dropView(Session session, QualifiedObjectName viewName);
+
+    /**
+     * Try to locate a table index that can lookup results by indexableColumns and provide the requested outputColumns.
+     */
+    Optional<ResolvedIndex> resolveIndex(Session session, TableHandle tableHandle, Set<ColumnHandle> indexableColumns, Set<ColumnHandle> outputColumns, TupleDomain<ColumnHandle> tupleDomain);
+
+    /**
+     * Grants the specified privilege to the specified user on the specified table
+     */
+    void grantTablePrivileges(Session session, QualifiedObjectName tableName, Set<Privilege> privileges, String grantee, boolean grantOption);
+
+    /**
+     * Revokes the specified privilege on the specified table from the specified user
+     */
+    void revokeTablePrivileges(Session session, QualifiedObjectName tableName, Set<Privilege> privileges, String grantee, boolean grantOption);
 
     FunctionRegistry getFunctionRegistry();
+
+    ProcedureRegistry getProcedureRegistry();
 
     TypeManager getTypeManager();
 
     BlockEncodingSerde getBlockEncodingSerde();
+
+    SessionPropertyManager getSessionPropertyManager();
+
+    TablePropertyManager getTablePropertyManager();
 }

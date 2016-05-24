@@ -15,7 +15,6 @@ package com.facebook.presto.operator;
 
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
-import it.unimi.dsi.fastutil.longs.LongIterator;
 
 import java.io.Closeable;
 
@@ -26,7 +25,9 @@ public interface LookupSource
 
     long getInMemorySizeInBytes();
 
-    long getJoinPosition(int position, Page page, int rawHash);
+    int getJoinPositionCount();
+
+    long getJoinPosition(int position, Page page, long rawHash);
 
     long getJoinPosition(int position, Page page);
 
@@ -34,8 +35,17 @@ public interface LookupSource
 
     void appendTo(long position, PageBuilder pageBuilder, int outputChannelOffset);
 
-    LongIterator getUnvisitedJoinPositions();
+    default OuterPositionIterator getOuterPositionIterator()
+    {
+        return (pageBuilder, outputChannelOffset) -> false;
+    }
 
+    // this is only here for index lookup source
     @Override
     void close();
+
+    interface OuterPositionIterator
+    {
+        boolean appendToNext(PageBuilder pageBuilder, int outputChannelOffset);
+    }
 }

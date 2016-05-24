@@ -17,16 +17,21 @@ import com.facebook.presto.operator.Description;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.type.SqlType;
 import com.google.common.base.Splitter;
+import com.google.common.escape.Escaper;
+import com.google.common.net.UrlEscapers;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 
 import javax.annotation.Nullable;
 
+import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.net.URLDecoder;
 import java.util.Iterator;
 
 import static com.google.common.base.Strings.nullToEmpty;
+import static io.airlift.slice.Slices.utf8Slice;
 import static java.nio.charset.StandardCharsets.UTF_8;
 
 public final class UrlFunctions
@@ -111,14 +116,14 @@ public final class UrlFunctions
         }
 
         Slice query = slice(uri.getQuery());
-        String parameter = parameterName.toString(UTF_8);
-        Iterable<String> queryArgs = QUERY_SPLITTER.split(query.toString(UTF_8));
+        String parameter = parameterName.toStringUtf8();
+        Iterable<String> queryArgs = QUERY_SPLITTER.split(query.toStringUtf8());
 
         for (String queryArg : queryArgs) {
             Iterator<String> arg = ARG_SPLITTER.split(queryArg).iterator();
             if (arg.next().equals(parameter)) {
                 if (arg.hasNext()) {
-                    return Slices.copiedBuffer(arg.next(), UTF_8);
+                    return utf8Slice(arg.next());
                 }
                 // first matched key is empty
                 return Slices.EMPTY_SLICE;
@@ -129,16 +134,38 @@ public final class UrlFunctions
         return null;
     }
 
+    @Description("escape a string for use in URL query parameter names and values")
+    @ScalarFunction
+    @SqlType(StandardTypes.VARCHAR)
+    public static Slice urlEncode(@SqlType(StandardTypes.VARCHAR) Slice value)
+    {
+        Escaper escaper = UrlEscapers.urlFormParameterEscaper();
+        return slice(escaper.escape(value.toStringUtf8()));
+    }
+
+    @Description("unescape a URL-encoded string")
+    @ScalarFunction
+    @SqlType(StandardTypes.VARCHAR)
+    public static Slice urlDecode(@SqlType(StandardTypes.VARCHAR) Slice value)
+    {
+        try {
+            return slice(URLDecoder.decode(value.toStringUtf8(), UTF_8.name()));
+        }
+        catch (UnsupportedEncodingException e) {
+            throw new AssertionError(e);
+        }
+    }
+
     private static Slice slice(@Nullable String s)
     {
-        return Slices.copiedBuffer(nullToEmpty(s), UTF_8);
+        return utf8Slice(nullToEmpty(s));
     }
 
     @Nullable
     private static URI parseUrl(Slice url)
     {
         try {
-            return new URI(url.toString(UTF_8));
+            return new URI(url.toStringUtf8());
         }
         catch (URISyntaxException e) {
             return null;

@@ -15,6 +15,8 @@ package com.facebook.presto.spi.block;
 
 import io.airlift.slice.Slice;
 
+import java.util.List;
+
 public abstract class AbstractArrayElementBlock
         implements Block
 {
@@ -133,7 +135,7 @@ public abstract class AbstractArrayElementBlock
     }
 
     @Override
-    public int hash(int position, int offset, int length)
+    public long hash(int position, int offset, int length)
     {
         checkReadablePosition(position);
         return getBlock().hash(position + start, offset, length);
@@ -149,7 +151,8 @@ public abstract class AbstractArrayElementBlock
     @Override
     public Block getSingleValueBlock(int position)
     {
-        throw new UnsupportedOperationException();
+        checkReadablePosition(position);
+        return getBlock().getSingleValueBlock(position + start);
     }
 
     @Override
@@ -172,6 +175,12 @@ public abstract class AbstractArrayElementBlock
     }
 
     @Override
+    public Block copyPositions(List<Integer> positions)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public Block getRegion(int position, int length)
     {
         throw new UnsupportedOperationException();
@@ -181,11 +190,5 @@ public abstract class AbstractArrayElementBlock
     public Block copyRegion(int position, int length)
     {
         throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public int getRetainedSizeInBytes()
-    {
-        return getBlock().getRetainedSizeInBytes();
     }
 }

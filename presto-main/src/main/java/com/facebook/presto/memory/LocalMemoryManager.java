@@ -22,20 +22,23 @@ import javax.inject.Inject;
 import java.util.List;
 import java.util.Map;
 
+import static com.facebook.presto.memory.NodeMemoryConfig.QUERY_MAX_MEMORY_PER_NODE_CONFIG;
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.units.DataSize.Unit.BYTE;
+import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
 public final class LocalMemoryManager
 {
     public static final MemoryPoolId GENERAL_POOL = new MemoryPoolId("general");
     public static final MemoryPoolId RESERVED_POOL = new MemoryPoolId("reserved");
+    public static final MemoryPoolId SYSTEM_POOL = new MemoryPoolId("system");
 
     private final DataSize maxMemory;
     private final Map<MemoryPoolId, MemoryPool> pools;
 
     @Inject
-    public LocalMemoryManager(MemoryManagerConfig config, ReservedSystemMemoryConfig systemMemoryConfig)
+    public LocalMemoryManager(NodeMemoryConfig config, ReservedSystemMemoryConfig systemMemoryConfig)
     {
         requireNonNull(config, "config is null");
         requireNonNull(systemMemoryConfig, "systemMemoryConfig is null");
@@ -44,9 +47,11 @@ public final class LocalMemoryManager
         maxMemory = new DataSize(maxHeap - systemMemoryConfig.getReservedSystemMemory().toBytes(), BYTE);
 
         ImmutableMap.Builder<MemoryPoolId, MemoryPool> builder = ImmutableMap.builder();
-        builder.put(RESERVED_POOL, new MemoryPool(RESERVED_POOL, config.getMaxQueryMemoryPerNode(), config.isClusterMemoryManagerEnabled()));
+        checkArgument(config.getMaxQueryMemoryPerNode().toBytes() < maxMemory.toBytes(), format("%s set to %s, but only %s of useable heap available", QUERY_MAX_MEMORY_PER_NODE_CONFIG, config.getMaxQueryMemoryPerNode(), maxMemory));
+        builder.put(RESERVED_POOL, new MemoryPool(RESERVED_POOL, config.getMaxQueryMemoryPerNode()));
         DataSize generalPoolSize = new DataSize(Math.max(0, maxMemory.toBytes() - config.getMaxQueryMemoryPerNode().toBytes()), BYTE);
-        builder.put(GENERAL_POOL, new MemoryPool(GENERAL_POOL, generalPoolSize, config.isClusterMemoryManagerEnabled()));
+        builder.put(GENERAL_POOL, new MemoryPool(GENERAL_POOL, generalPoolSize));
+        builder.put(SYSTEM_POOL, new MemoryPool(SYSTEM_POOL, systemMemoryConfig.getReservedSystemMemory()));
         this.pools = builder.build();
     }
 

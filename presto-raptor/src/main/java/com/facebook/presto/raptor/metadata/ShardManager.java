@@ -14,11 +14,12 @@
 package com.facebook.presto.raptor.metadata;
 
 import com.facebook.presto.raptor.RaptorColumnHandle;
-import com.facebook.presto.raptor.util.CloseableIterator;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
+import org.skife.jdbi.v2.ResultIterator;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -28,40 +29,72 @@ public interface ShardManager
     /**
      * Create a table.
      */
-    void createTable(long tableId, List<ColumnInfo> columns);
+    void createTable(long tableId, List<ColumnInfo> columns, boolean bucketed);
+
+    /**
+     * Drop a table.
+     */
+    void dropTable(long tableId);
+
+    /**
+     * Add a column to the end of the table.
+     */
+    void addColumn(long tableId, ColumnInfo column);
 
     /**
      * Commit data for a table.
      */
-    void commitShards(long tableId, List<ColumnInfo> columns, Collection<ShardInfo> shards, Optional<String> externalBatchId);
-
-    /**
-     * Replace oldShardsIds with newShards.
-     */
-    void replaceShardIds(long tableId, List<ColumnInfo> columns, Set<Long> oldShardIds, Collection<ShardInfo> newShards);
+    void commitShards(long transactionId, long tableId, List<ColumnInfo> columns, Collection<ShardInfo> shards, Optional<String> externalBatchId);
 
     /**
      * Replace oldShardsUuids with newShards.
      */
-    void replaceShardUuids(long tableId, List<ColumnInfo> columns, Set<UUID> oldShardUuids, Collection<ShardInfo> newShards);
+    void replaceShardUuids(long transactionId, long tableId, List<ColumnInfo> columns, Set<UUID> oldShardUuids, Collection<ShardInfo> newShards);
 
     /**
-     * Get shard metadata for table shards on a given node.
+     * Get shard metadata for shards on a given node.
      */
-    Set<ShardMetadata> getNodeTableShards(String nodeIdentifier, long tableId);
+    Set<ShardMetadata> getNodeShards(String nodeIdentifier);
 
     /**
      * Return the shard nodes a given table.
      */
-    CloseableIterator<ShardNodes> getShardNodes(long tableId, TupleDomain<RaptorColumnHandle> effectivePredicate);
-
-    /**
-     * Return the shards for a given node
-     */
-    Set<UUID> getNodeShards(String nodeIdentifier);
+    ResultIterator<BucketShards> getShardNodes(long tableId, boolean bucketed, boolean merged, TupleDomain<RaptorColumnHandle> effectivePredicate);
 
     /**
      * Assign a shard to a node.
      */
-    void assignShard(long tableId, UUID shardUuid, String nodeIdentifier);
+    void assignShard(long tableId, UUID shardUuid, String nodeIdentifier, boolean gracePeriod);
+
+    /**
+     * Remove shard assignment from a node.
+     */
+    void unassignShard(long tableId, UUID shardUuid, String nodeIdentifier);
+
+    /**
+     * Get the number of bytes used by assigned shards per node.
+     */
+    Map<String, Long> getNodeBytes();
+
+    /**
+     * Begin a transaction for creating shards.
+     *
+     * @return transaction ID
+     */
+    long beginTransaction();
+
+    /**
+     * Rollback a transaction.
+     */
+    void rollbackTransaction(long transactionId);
+
+    /**
+     * Create initial bucket assignments for a distribution.
+     */
+    void createBuckets(long distributionId, int bucketCount);
+
+    /**
+     * Get map of buckets to node identifiers for a table.
+     */
+    Map<Integer, String> getBucketAssignments(long distributionId);
 }

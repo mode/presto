@@ -14,9 +14,10 @@
 package com.facebook.presto.sql.tree;
 
 import java.util.Objects;
+import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class ShowColumns
         extends Statement
@@ -25,7 +26,18 @@ public class ShowColumns
 
     public ShowColumns(QualifiedName table)
     {
-        this.table = checkNotNull(table, "table is null");
+        this(Optional.empty(), table);
+    }
+
+    public ShowColumns(NodeLocation location, QualifiedName table)
+    {
+        this(Optional.of(location), table);
+    }
+
+    private ShowColumns(Optional<NodeLocation> location, QualifiedName table)
+    {
+        super(location);
+        this.table = requireNonNull(table, "table is null");
     }
 
     public QualifiedName getTable()

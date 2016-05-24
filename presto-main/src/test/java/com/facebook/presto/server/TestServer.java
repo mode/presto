@@ -32,7 +32,11 @@ import org.testng.annotations.Test;
 import java.net.URI;
 import java.util.List;
 
+import static com.facebook.presto.SystemSessionProperties.DISTRIBUTED_JOIN;
+import static com.facebook.presto.SystemSessionProperties.HASH_PARTITION_COUNT;
+import static com.facebook.presto.SystemSessionProperties.QUERY_MAX_MEMORY;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CATALOG;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_PREPARED_STATEMENT;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SCHEMA;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SESSION;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SOURCE;
@@ -92,9 +96,9 @@ public class TestServer
                 .setHeader(PRESTO_SOURCE, "source")
                 .setHeader(PRESTO_CATALOG, "catalog")
                 .setHeader(PRESTO_SCHEMA, "schema")
-                .addHeader(PRESTO_SESSION, "system-name=system-value")
-                .addHeader(PRESTO_SESSION, "catalog.name=catalog-value")
-                .addHeader(PRESTO_SESSION, "catalog2.name=catalog2-value")
+                .addHeader(PRESTO_SESSION, QUERY_MAX_MEMORY + "=1GB")
+                .addHeader(PRESTO_SESSION, DISTRIBUTED_JOIN + "=true," + HASH_PARTITION_COUNT + " = 43")
+                .addHeader(PRESTO_PREPARED_STATEMENT, "foo=select * from bar")
                 .build();
 
         QueryResults queryResults = client.execute(request, createJsonResponseHandler(jsonCodec(QueryResults.class)));
@@ -103,10 +107,16 @@ public class TestServer
         QueryInfo queryInfo = server.getQueryManager().getQueryInfo(new QueryId(queryResults.getId()));
 
         // verify session properties
-        assertEquals(queryInfo.getSession().getSystemProperties(), ImmutableMap.of("system-name", "system-value"));
-        assertEquals(queryInfo.getSession().getCatalogProperties(), ImmutableMap.of(
-                "catalog", ImmutableMap.of("name", "catalog-value"),
-                "catalog2", ImmutableMap.of("name", "catalog2-value")));
+        assertEquals(queryInfo.getSession().getSystemProperties(), ImmutableMap.builder()
+                .put(QUERY_MAX_MEMORY, "1GB")
+                .put(DISTRIBUTED_JOIN, "true")
+                .put(HASH_PARTITION_COUNT, "43")
+                .build());
+
+        // verify prepared statements
+        assertEquals(queryInfo.getSession().getPreparedStatements(), ImmutableMap.builder()
+                .put("foo", "select * from bar")
+                .build());
 
         ImmutableList.Builder<List<Object>> data = ImmutableList.builder();
         if (queryResults.getData() != null) {

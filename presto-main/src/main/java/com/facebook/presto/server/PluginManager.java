@@ -17,10 +17,12 @@ import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.connector.ConnectorManager;
 import com.facebook.presto.metadata.FunctionFactory;
 import com.facebook.presto.metadata.Metadata;
-import com.facebook.presto.spi.ConnectorFactory;
+import com.facebook.presto.security.AccessControlManager;
 import com.facebook.presto.spi.Plugin;
 import com.facebook.presto.spi.block.BlockEncodingFactory;
 import com.facebook.presto.spi.classloader.ThreadContextClassLoader;
+import com.facebook.presto.spi.connector.ConnectorFactory;
+import com.facebook.presto.spi.security.SystemAccessControlFactory;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.type.ParametricType;
 import com.facebook.presto.type.TypeRegistry;
@@ -50,10 +52,13 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.facebook.presto.server.PluginDiscovery.discoverPlugins;
+import static com.facebook.presto.server.PluginDiscovery.writePluginServices;
+import static java.util.Objects.requireNonNull;
 
 @ThreadSafe
 public class PluginManager
@@ -76,6 +81,7 @@ public class PluginManager
     private final Injector injector;
     private final ConnectorManager connectorManager;
     private final Metadata metadata;
+    private final AccessControlManager accessControlManager;
     private final BlockEncodingManager blockEncodingManager;
     private final TypeRegistry typeRegistry;
     private final ArtifactResolver resolver;
@@ -93,14 +99,15 @@ public class PluginManager
             ConnectorManager connectorManager,
             ConfigurationFactory configurationFactory,
             Metadata metadata,
+            AccessControlManager accessControlManager,
             BlockEncodingManager blockEncodingManager,
             TypeRegistry typeRegistry)
     {
-        checkNotNull(injector, "injector is null");
-        checkNotNull(nodeInfo, "nodeInfo is null");
-        checkNotNull(httpServerInfo, "httpServerInfo is null");
-        checkNotNull(config, "config is null");
-        checkNotNull(configurationFactory, "configurationFactory is null");
+        requireNonNull(injector, "injector is null");
+        requireNonNull(nodeInfo, "nodeInfo is null");
+        requireNonNull(httpServerInfo, "httpServerInfo is null");
+        requireNonNull(config, "config is null");
+        requireNonNull(configurationFactory, "configurationFactory is null");
 
         this.injector = injector;
         installedPluginsDir = config.getInstalledPluginsDir();
@@ -118,10 +125,11 @@ public class PluginManager
         optionalConfig.put("http-server.http.port", Integer.toString(httpServerInfo.getHttpUri().getPort()));
         this.optionalConfig = ImmutableMap.copyOf(optionalConfig);
 
-        this.connectorManager = checkNotNull(connectorManager, "connectorManager is null");
-        this.metadata = checkNotNull(metadata, "metadata is null");
-        this.blockEncodingManager = checkNotNull(blockEncodingManager, "blockEncodingManager is null");
-        this.typeRegistry = checkNotNull(typeRegistry, "typeRegistry is null");
+        this.connectorManager = requireNonNull(connectorManager, "connectorManager is null");
+        this.metadata = requireNonNull(metadata, "metadata is null");
+        this.accessControlManager = requireNonNull(accessControlManager, "accessControlManager is null");
+        this.blockEncodingManager = requireNonNull(blockEncodingManager, "blockEncodingManager is null");
+        this.typeRegistry = requireNonNull(typeRegistry, "typeRegistry is null");
     }
 
     public boolean arePluginsLoaded()
@@ -145,6 +153,8 @@ public class PluginManager
         for (String plugin : plugins) {
             loadPlugin(plugin);
         }
+
+        metadata.verifyComparableOrderableContract();
 
         pluginsLoaded.set(true);
     }
@@ -197,6 +207,11 @@ public class PluginManager
             typeRegistry.addParametricType(parametricType);
         }
 
+        for (com.facebook.presto.spi.ConnectorFactory connectorFactory : plugin.getServices(com.facebook.presto.spi.ConnectorFactory.class)) {
+            log.info("Registering legacy connector %s", connectorFactory.getName());
+            connectorManager.addConnectorFactory(connectorFactory);
+        }
+
         for (ConnectorFactory connectorFactory : plugin.getServices(ConnectorFactory.class)) {
             log.info("Registering connector %s", connectorFactory.getName());
             connectorManager.addConnectorFactory(connectorFactory);
@@ -205,6 +220,11 @@ public class PluginManager
         for (FunctionFactory functionFactory : plugin.getServices(FunctionFactory.class)) {
             log.info("Registering functions from %s", functionFactory.getClass().getName());
             metadata.addFunctions(functionFactory.listFunctions());
+        }
+
+        for (SystemAccessControlFactory accessControlFactory : plugin.getServices(SystemAccessControlFactory.class)) {
+            log.info("Registering system access control %s", accessControlFactory.getName());
+            accessControlManager.addSystemAccessControlFactory(accessControlFactory);
         }
     }
 
@@ -225,7 +245,15 @@ public class PluginManager
             throws Exception
     {
         List<Artifact> artifacts = resolver.resolvePom(pomFile);
-        return createClassLoader(artifacts, pomFile.getPath());
+        URLClassLoader classLoader = createClassLoader(artifacts, pomFile.getPath());
+
+        Artifact artifact = artifacts.get(0);
+        Set<String> plugins = discoverPlugins(artifact, classLoader);
+        if (!plugins.isEmpty()) {
+            writePluginServices(plugins, artifact.getFile());
+        }
+
+        return classLoader;
     }
 
     private URLClassLoader buildClassLoaderFromDirectory(File dir)

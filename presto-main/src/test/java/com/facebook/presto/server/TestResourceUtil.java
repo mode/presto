@@ -14,16 +14,24 @@
 package com.facebook.presto.server;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.execution.QueryId;
+import com.facebook.presto.metadata.SessionPropertyManager;
+import com.facebook.presto.security.AllowAllAccessControl;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.Test;
 
 import javax.servlet.http.HttpServletRequest;
+import javax.ws.rs.WebApplicationException;
 
 import java.util.Locale;
 
+import static com.facebook.presto.SystemSessionProperties.DISTRIBUTED_JOIN;
+import static com.facebook.presto.SystemSessionProperties.HASH_PARTITION_COUNT;
+import static com.facebook.presto.SystemSessionProperties.QUERY_MAX_MEMORY;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CATALOG;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_LANGUAGE;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_PREPARED_STATEMENT;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SCHEMA;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SESSION;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SOURCE;
@@ -47,24 +55,48 @@ public class TestResourceUtil
                         .put(PRESTO_SCHEMA, "testSchema")
                         .put(PRESTO_LANGUAGE, "zh-TW")
                         .put(PRESTO_TIME_ZONE, "Asia/Taipei")
-                        .put(PRESTO_SESSION, "first=abc")
-                        .put(PRESTO_SESSION, "second=mno,third=xyz")
+                        .put(PRESTO_SESSION, QUERY_MAX_MEMORY + "=1GB")
+                        .put(PRESTO_SESSION, DISTRIBUTED_JOIN + "=true," + HASH_PARTITION_COUNT + " = 43")
+                        .put(PRESTO_PREPARED_STATEMENT, "query1=select * from foo,query2=select * from bar")
                         .build(),
                 "testRemote");
 
-        Session session = createSessionForRequest(request);
+        Session session = createSessionForRequest(request, new AllowAllAccessControl(), new SessionPropertyManager(), new QueryId("test_query_id"));
 
+        assertEquals(session.getQueryId(), new QueryId("test_query_id"));
         assertEquals(session.getUser(), "testUser");
-        assertEquals(session.getSource(), "testSource");
-        assertEquals(session.getCatalog(), "testCatalog");
-        assertEquals(session.getSchema(), "testSchema");
+        assertEquals(session.getSource().get(), "testSource");
+        assertEquals(session.getCatalog().get(), "testCatalog");
+        assertEquals(session.getSchema().get(), "testSchema");
         assertEquals(session.getLocale(), Locale.TAIWAN);
         assertEquals(session.getTimeZoneKey(), getTimeZoneKey("Asia/Taipei"));
-        assertEquals(session.getRemoteUserAddress(), "testRemote");
+        assertEquals(session.getRemoteUserAddress().get(), "testRemote");
         assertEquals(session.getSystemProperties(), ImmutableMap.<String, String>builder()
-                .put("first", "abc")
-                .put("second", "mno")
-                .put("third", "xyz")
+                .put(QUERY_MAX_MEMORY, "1GB")
+                .put(DISTRIBUTED_JOIN, "true")
+                .put(HASH_PARTITION_COUNT, "43")
                 .build());
+        assertEquals(session.getPreparedStatements(), ImmutableMap.<String, String>builder()
+                .put("query1", "select * from foo")
+                .put("query2", "select * from bar")
+                .build());
+    }
+
+    @Test(expectedExceptions = WebApplicationException.class)
+    public void testPreparedStatementsHeaderDoesNotParse()
+            throws Exception
+    {
+        HttpServletRequest request = new MockHttpServletRequest(
+                ImmutableListMultimap.<String, String>builder()
+                        .put(PRESTO_USER, "testUser")
+                        .put(PRESTO_SOURCE, "testSource")
+                        .put(PRESTO_CATALOG, "testCatalog")
+                        .put(PRESTO_SCHEMA, "testSchema")
+                        .put(PRESTO_LANGUAGE, "zh-TW")
+                        .put(PRESTO_TIME_ZONE, "Asia/Taipei")
+                        .put(PRESTO_PREPARED_STATEMENT, "query1=abcdefg")
+                        .build(),
+                "testRemote");
+        createSessionForRequest(request, new AllowAllAccessControl(), new SessionPropertyManager(), new QueryId("test_query_id"));
     }
 }

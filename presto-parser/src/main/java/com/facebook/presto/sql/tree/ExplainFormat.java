@@ -14,9 +14,10 @@
 package com.facebook.presto.sql.tree;
 
 import java.util.Objects;
+import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class ExplainFormat
         extends ExplainOption
@@ -24,15 +25,25 @@ public class ExplainFormat
     public enum Type
     {
         TEXT,
-        GRAPHVIZ,
-        JSON
+        GRAPHVIZ
     }
 
     private final Type type;
 
     public ExplainFormat(Type type)
     {
-        this.type = checkNotNull(type, "type is null");
+        this(Optional.empty(), type);
+    }
+
+    public ExplainFormat(NodeLocation location, Type type)
+    {
+        this(Optional.of(location), type);
+    }
+
+    private ExplainFormat(Optional<NodeLocation> location, Type type)
+    {
+        super(location);
+        this.type = requireNonNull(type, "type is null");
     }
 
     public Type getType()

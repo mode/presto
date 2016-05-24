@@ -15,11 +15,12 @@ package com.facebook.presto.hive;
 
 import com.facebook.presto.spi.ColumnHandle;
 import com.facebook.presto.spi.ConnectorPageSource;
-import com.facebook.presto.spi.ConnectorPageSourceProvider;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplit;
 import com.facebook.presto.spi.RecordPageSource;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.connector.ConnectorPageSourceProvider;
+import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
@@ -36,8 +37,8 @@ import java.util.Properties;
 import java.util.Set;
 
 import static com.facebook.presto.hive.util.Types.checkType;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.collect.Iterables.transform;
+import static java.util.Objects.requireNonNull;
 
 public class HivePageSourceProvider
         implements ConnectorPageSourceProvider
@@ -57,21 +58,20 @@ public class HivePageSourceProvider
             Set<HivePageSourceFactory> pageSourceFactories,
             TypeManager typeManager)
     {
-        checkNotNull(hiveClientConfig, "hiveClientConfig is null");
-        this.hiveStorageTimeZone = DateTimeZone.forTimeZone(hiveClientConfig.getTimeZone());
-        this.hdfsEnvironment = checkNotNull(hdfsEnvironment, "hdfsEnvironment is null");
-        this.cursorProviders = ImmutableSet.copyOf(checkNotNull(cursorProviders, "cursorProviders is null"));
-        this.pageSourceFactories = ImmutableSet.copyOf(checkNotNull(pageSourceFactories, "pageSourceFactories is null"));
-        this.typeManager = checkNotNull(typeManager, "typeManager is null");
+        requireNonNull(hiveClientConfig, "hiveClientConfig is null");
+        this.hiveStorageTimeZone = hiveClientConfig.getDateTimeZone();
+        this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
+        this.cursorProviders = ImmutableSet.copyOf(requireNonNull(cursorProviders, "cursorProviders is null"));
+        this.pageSourceFactories = ImmutableSet.copyOf(requireNonNull(pageSourceFactories, "pageSourceFactories is null"));
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
     }
 
     @Override
-    public ConnectorPageSource createPageSource(ConnectorSplit split, List<ColumnHandle> columns)
+    public ConnectorPageSource createPageSource(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorSplit split, List<ColumnHandle> columns)
     {
         HiveSplit hiveSplit = checkType(split, HiveSplit.class, "split");
 
         String clientId = hiveSplit.getClientId();
-        ConnectorSession session = hiveSplit.getSession();
 
         Path path = new Path(hiveSplit.getPath());
         long start = hiveSplit.getStart();

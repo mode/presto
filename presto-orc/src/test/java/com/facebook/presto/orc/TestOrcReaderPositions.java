@@ -16,6 +16,7 @@ package com.facebook.presto.orc;
 import com.facebook.presto.orc.OrcTester.TempFile;
 import com.facebook.presto.orc.metadata.IntegerStatistics;
 import com.facebook.presto.orc.metadata.OrcMetadataReader;
+import com.facebook.presto.spi.block.Block;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator;
 import org.apache.hadoop.hive.ql.io.orc.OrcOutputFormat;
 import org.apache.hadoop.hive.ql.io.orc.OrcSerde;
@@ -45,7 +46,7 @@ public class TestOrcReaderPositions
     public void testEntireFile()
             throws Exception
     {
-        try (TempFile tempFile = new TempFile("test", "orc")) {
+        try (TempFile tempFile = new TempFile()) {
             createMultiStripeFile(tempFile.getFile());
 
             OrcRecordReader reader = createCustomOrcRecordReader(tempFile, new OrcMetadataReader(), OrcPredicate.TRUE, BIGINT);
@@ -72,7 +73,7 @@ public class TestOrcReaderPositions
     public void testStripeSkipping()
             throws Exception
     {
-        try (TempFile tempFile = new TempFile("test", "orc")) {
+        try (TempFile tempFile = new TempFile()) {
             createMultiStripeFile(tempFile.getFile());
 
             // test reading second and fourth stripes
@@ -114,7 +115,7 @@ public class TestOrcReaderPositions
     public void testRowGroupSkipping()
             throws Exception
     {
-        try (TempFile tempFile = new TempFile("test", "orc")) {
+        try (TempFile tempFile = new TempFile()) {
             // create single strip file with multiple row groups
             int rowCount = 142_000;
             createSequentialFile(tempFile.getFile(), rowCount);
@@ -142,10 +143,9 @@ public class TestOrcReaderPositions
                     break;
                 }
 
-                LongVector longVector = new LongVector(batchSize);
-                reader.readVector(0, longVector);
+                Block block = reader.readBlock(BIGINT, 0);
                 for (int i = 0; i < batchSize; i++) {
-                    assertEquals(longVector.vector[i], position + i);
+                    assertEquals(BIGINT.getLong(block, i), position + i);
                 }
 
                 assertEquals(reader.getFilePosition(), position);
@@ -163,10 +163,9 @@ public class TestOrcReaderPositions
     private static void assertCurrentBatch(OrcRecordReader reader, int stripe)
             throws IOException
     {
-        LongVector longVector = new LongVector(20);
-        reader.readVector(0, longVector);
+        Block block = reader.readBlock(BIGINT, 0);
         for (int i = 0; i < 20; i++) {
-            assertEquals(longVector.vector[i], ((stripe * 20L) + i) * 3);
+            assertEquals(BIGINT.getLong(block, i), ((stripe * 20L) + i) * 3);
         }
     }
 

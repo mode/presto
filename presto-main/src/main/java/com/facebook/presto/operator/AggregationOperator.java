@@ -20,14 +20,15 @@ import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Step;
+import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Group input data and produce a single block for each sequence of identical values.
@@ -39,14 +40,16 @@ public class AggregationOperator
             implements OperatorFactory
     {
         private final int operatorId;
+        private final PlanNodeId planNodeId;
         private final Step step;
         private final List<AccumulatorFactory> accumulatorFactories;
         private final List<Type> types;
         private boolean closed;
 
-        public AggregationOperatorFactory(int operatorId, Step step, List<AccumulatorFactory> accumulatorFactories)
+        public AggregationOperatorFactory(int operatorId, PlanNodeId planNodeId, Step step, List<AccumulatorFactory> accumulatorFactories)
         {
             this.operatorId = operatorId;
+            this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
             this.step = step;
             this.accumulatorFactories = ImmutableList.copyOf(accumulatorFactories);
             this.types = toTypes(step, accumulatorFactories);
@@ -62,7 +65,7 @@ public class AggregationOperator
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, AggregationOperator.class.getSimpleName());
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, AggregationOperator.class.getSimpleName());
             return new AggregationOperator(operatorContext, step, accumulatorFactories);
         }
 
@@ -70,6 +73,12 @@ public class AggregationOperator
         public void close()
         {
             closed = true;
+        }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new AggregationOperatorFactory(operatorId, planNodeId, step, accumulatorFactories);
         }
     }
 
@@ -88,10 +97,10 @@ public class AggregationOperator
 
     public AggregationOperator(OperatorContext operatorContext, Step step, List<AccumulatorFactory> accumulatorFactories)
     {
-        this.operatorContext = checkNotNull(operatorContext, "operatorContext is null");
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
 
-        checkNotNull(step, "step is null");
-        checkNotNull(accumulatorFactories, "accumulatorFactories is null");
+        requireNonNull(step, "step is null");
+        requireNonNull(accumulatorFactories, "accumulatorFactories is null");
 
         this.types = toTypes(step, accumulatorFactories);
 
@@ -139,7 +148,7 @@ public class AggregationOperator
     public void addInput(Page page)
     {
         checkState(needsInput(), "Operator is already finishing");
-        checkNotNull(page, "page is null");
+        requireNonNull(page, "page is null");
 
         long memorySize = 0;
         for (Aggregator aggregate : aggregates) {
@@ -190,6 +199,8 @@ public class AggregationOperator
 
         private Aggregator(AccumulatorFactory accumulatorFactory, Step step)
         {
+            checkArgument(step != Step.INTERMEDIATE, "intermediate aggregation not supported");
+
             if (step == Step.FINAL) {
                 checkArgument(accumulatorFactory.getInputChannels().size() == 1, "expected 1 input channel for intermediate aggregation");
                 intermediateChannel = accumulatorFactory.getInputChannels().get(0);

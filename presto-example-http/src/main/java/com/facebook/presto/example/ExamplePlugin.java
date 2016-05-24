@@ -13,8 +13,8 @@
  */
 package com.facebook.presto.example;
 
-import com.facebook.presto.spi.ConnectorFactory;
 import com.facebook.presto.spi.Plugin;
+import com.facebook.presto.spi.connector.ConnectorFactory;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -24,7 +24,7 @@ import javax.inject.Inject;
 import java.util.List;
 import java.util.Map;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class ExamplePlugin
         implements Plugin
@@ -35,7 +35,7 @@ public class ExamplePlugin
     @Override
     public synchronized void setOptionalConfig(Map<String, String> optionalConfig)
     {
-        this.optionalConfig = ImmutableMap.copyOf(checkNotNull(optionalConfig, "optionalConfig is null"));
+        this.optionalConfig = ImmutableMap.copyOf(requireNonNull(optionalConfig, "optionalConfig is null"));
     }
 
     @Inject

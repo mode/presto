@@ -1,19 +1,53 @@
 language: java
 
-jdk:
-  - oraclejdk8
-
 env:
   global:
     - MAVEN_OPTS="-Xmx256M"
+  matrix:
+    - TEST_MODULES=!presto-tests,!presto-kafka,!presto-redis,!presto-cassandra,!presto-raptor,!presto-postgresql,!presto-mysql
+    - TEST_MODULES=presto-tests
+    - TEST_MODULES=presto-raptor,presto-redis,presto-cassandra,presto-kafka,presto-postgresql,presto-mysql
+    - RUN_PRODUCT_TESTS="singlenode -x quarantine,big_query,storage_formats,mysql_connector,postgresql_connector,profile_specific_tests"
+    - RUN_PRODUCT_TESTS="singlenode-kerberos-hdfs-impersonation -g storage_formats,cli,hdfs_impersonation"
+    - INTEGRATION_TESTS=true
 
-sudo: false
+sudo: required
+dist: trusty
 
-cache:
-  directories:
-    - $HOME/.m2/io
-    - $HOME/.m2/org
+addons:
+  apt:
+    packages:
+      - oracle-java8-installer
 
-install: mvn install -DskipTests=true -Dmaven.javadoc.skip=true -B -V -q -T 2
+services:
+  - docker
 
-script: mvn test -Dair.check.skip-dependency=true
+before_install:
+  # This section can be removed once travis get equipped with docker 1.10 and docker-compose 1.6
+  - |
+    sudo apt-get update
+    sudo apt-get -o "Dpkg::Options::=--force-confold" -y install docker-engine
+    sudo rm /usr/local/bin/docker-compose
+    curl -L https://github.com/docker/compose/releases/download/1.6.2/docker-compose-`uname -s`-`uname -m` > docker-compose
+    chmod +x docker-compose
+    sudo mv docker-compose /usr/local/bin
+
+install: ./mvnw install -DskipTests=true -Dmaven.javadoc.skip=true -B -V -q -T 2
+
+script:
+  - |
+    if [ -v TEST_MODULES ]; then
+      ./mvnw test -Dair.check.skip-dependency=true -pl $TEST_MODULES;
+    fi
+  - |
+    if [ -v RUN_PRODUCT_TESTS ]; then
+      presto-product-tests/bin/run_on_docker.sh ${RUN_PRODUCT_TESTS}
+    fi
+  - |
+    if [ -v INTEGRATION_TESTS ]; then
+      presto-hive-hadoop2/bin/run_on_docker.sh
+    fi
+
+notifications:
+  slack:
+    secure: V5eyoGShxFoCcYJcp858vf/T6gC9KeMxL0C1EElcpZRcKBrIVZzvhek3HLHxZOxlghqnvNVsyDtU3u5orkEaAXeXj5c2dN+4XBsAB9oeN5MtQ0Z3VLAhZDqKIW1LzcXrq4DpzM0PkGhjfjum/P94/qFYk0UckPtB6a341AuYRo8=

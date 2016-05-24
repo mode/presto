@@ -16,7 +16,7 @@ package com.facebook.presto.sql.planner.plan;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TableLayoutHandle;
 import com.facebook.presto.spi.ColumnHandle;
-import com.facebook.presto.spi.TupleDomain;
+import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.tree.Expression;
 import com.fasterxml.jackson.annotation.JsonCreator;
@@ -33,7 +33,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class TableScanNode
@@ -70,12 +70,12 @@ public class TableScanNode
             @JsonProperty("originalConstraint") @Nullable Expression originalConstraint)
     {
         super(id);
-        checkNotNull(table, "table is null");
-        checkNotNull(outputs, "outputs is null");
-        checkNotNull(assignments, "assignments is null");
+        requireNonNull(table, "table is null");
+        requireNonNull(outputs, "outputs is null");
+        requireNonNull(assignments, "assignments is null");
         checkArgument(assignments.keySet().containsAll(outputs), "assignments does not cover all of outputs");
-        checkNotNull(tableLayout, "tableLayout is null");
-        checkNotNull(currentConstraint, "currentConstraint is null");
+        requireNonNull(tableLayout, "tableLayout is null");
+        requireNonNull(currentConstraint, "currentConstraint is null");
 
         this.table = table;
         this.outputSymbols = ImmutableList.copyOf(outputs);

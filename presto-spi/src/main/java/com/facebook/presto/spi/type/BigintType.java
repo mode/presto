@@ -61,10 +61,9 @@ public final class BigintType
     }
 
     @Override
-    public int hash(Block block, int position)
+    public long hash(Block block, int position)
     {
-        long value = block.getLong(position, 0);
-        return (int) (value ^ (value >>> 32));
+        return block.getLong(position, 0);
     }
 
     @Override
@@ -96,5 +95,17 @@ public final class BigintType
     public void writeLong(BlockBuilder blockBuilder, long value)
     {
         blockBuilder.writeLong(value).closeEntry();
+    }
+
+    @Override
+    public boolean equals(Object other)
+    {
+        return other == BIGINT;
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return getClass().hashCode();
     }
 }

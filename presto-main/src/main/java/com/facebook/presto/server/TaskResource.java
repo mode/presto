@@ -13,20 +13,23 @@
  */
 package com.facebook.presto.server;
 
+import com.facebook.presto.Session;
 import com.facebook.presto.execution.BufferResult;
 import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.TaskInfo;
 import com.facebook.presto.execution.TaskManager;
 import com.facebook.presto.execution.TaskState;
+import com.facebook.presto.execution.TaskStatus;
+import com.facebook.presto.metadata.SessionPropertyManager;
 import com.facebook.presto.spi.Page;
-import com.facebook.presto.util.MoreFutures;
 import com.google.common.collect.ImmutableList;
 import com.google.common.reflect.TypeToken;
-import com.google.common.util.concurrent.Futures;
-import com.google.common.util.concurrent.ListenableFuture;
+import io.airlift.concurrent.BoundedExecutor;
+import io.airlift.stats.TimeStat;
 import io.airlift.units.DataSize;
-import io.airlift.units.DataSize.Unit;
 import io.airlift.units.Duration;
+import org.weakref.jmx.Managed;
+import org.weakref.jmx.Nested;
 
 import javax.inject.Inject;
 import javax.ws.rs.Consumes;
@@ -40,6 +43,7 @@ import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
 import javax.ws.rs.QueryParam;
 import javax.ws.rs.container.AsyncResponse;
+import javax.ws.rs.container.CompletionCallback;
 import javax.ws.rs.container.Suspended;
 import javax.ws.rs.core.Context;
 import javax.ws.rs.core.GenericEntity;
@@ -49,16 +53,23 @@ import javax.ws.rs.core.Response.Status;
 import javax.ws.rs.core.UriInfo;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static com.facebook.presto.PrestoMediaTypes.PRESTO_PAGES;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_BUFFER_COMPLETE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CURRENT_STATE;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_MAX_SIZE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_MAX_WAIT;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_PAGE_NEXT_TOKEN;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_PAGE_TOKEN;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_TASK_INSTANCE_ID;
 import static com.google.common.collect.Iterables.transform;
+import static io.airlift.concurrent.MoreFutures.addTimeout;
 import static io.airlift.http.server.AsyncResponseHandler.bindAsyncResponse;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -68,17 +79,25 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 @Path("/v1/task")
 public class TaskResource
 {
-    private static final DataSize DEFAULT_MAX_SIZE = new DataSize(10, Unit.MEGABYTE);
-    private static final Duration DEFAULT_MAX_WAIT_TIME = new Duration(1, SECONDS);
+    private static final Duration DEFAULT_MAX_WAIT_TIME = new Duration(2, SECONDS);
 
     private final TaskManager taskManager;
-    private final ScheduledExecutorService executor;
+    private final SessionPropertyManager sessionPropertyManager;
+    private final Executor responseExecutor;
+    private final ScheduledExecutorService timeoutExecutor;
+    private final TimeStat readFromOutputBufferTime = new TimeStat();
+    private final TimeStat resultsRequestTime = new TimeStat();
 
     @Inject
-    public TaskResource(TaskManager taskManager, @ForAsyncHttpResponse ScheduledExecutorService executor)
+    public TaskResource(TaskManager taskManager,
+            SessionPropertyManager sessionPropertyManager,
+            @ForAsyncHttp BoundedExecutor responseExecutor,
+            @ForAsyncHttp ScheduledExecutorService timeoutExecutor)
     {
-        this.taskManager = checkNotNull(taskManager, "taskManager is null");
-        this.executor = checkNotNull(executor, "executor is null");
+        this.taskManager = requireNonNull(taskManager, "taskManager is null");
+        this.sessionPropertyManager = requireNonNull(sessionPropertyManager, "sessionPropertyManager is null");
+        this.responseExecutor = requireNonNull(responseExecutor, "responseExecutor is null");
+        this.timeoutExecutor = requireNonNull(timeoutExecutor, "timeoutExecutor is null");
     }
 
     @GET
@@ -98,9 +117,10 @@ public class TaskResource
     @Produces(MediaType.APPLICATION_JSON)
     public Response createOrUpdateTask(@PathParam("taskId") TaskId taskId, TaskUpdateRequest taskUpdateRequest, @Context UriInfo uriInfo)
     {
-        checkNotNull(taskUpdateRequest, "taskUpdateRequest is null");
+        requireNonNull(taskUpdateRequest, "taskUpdateRequest is null");
 
-        TaskInfo taskInfo = taskManager.updateTask(taskUpdateRequest.getSession(),
+        Session session = taskUpdateRequest.getSession().toSession(sessionPropertyManager);
+        TaskInfo taskInfo = taskManager.updateTask(session,
                 taskId,
                 taskUpdateRequest.getFragment(),
                 taskUpdateRequest.getSources(),
@@ -122,7 +142,7 @@ public class TaskResource
             @Context UriInfo uriInfo,
             @Suspended AsyncResponse asyncResponse)
     {
-        checkNotNull(taskId, "taskId is null");
+        requireNonNull(taskId, "taskId is null");
 
         if (currentState == null || maxWait == null) {
             TaskInfo taskInfo = taskManager.getTaskInfo(taskId);
@@ -133,43 +153,66 @@ public class TaskResource
             return;
         }
 
-        ListenableFuture<TaskInfo> futureTaskInfo = MoreFutures.addTimeout(
+        Duration waitTime = randomizeWaitTime(maxWait);
+        CompletableFuture<TaskInfo> futureTaskInfo = addTimeout(
                 taskManager.getTaskInfo(taskId, currentState),
                 () -> taskManager.getTaskInfo(taskId),
-                maxWait,
-                executor);
+                waitTime,
+                timeoutExecutor);
 
         if (shouldSummarize(uriInfo)) {
-            futureTaskInfo = Futures.transform(futureTaskInfo, TaskInfo::summarize);
+            futureTaskInfo = futureTaskInfo.thenApply(TaskInfo::summarize);
         }
 
         // For hard timeout, add an additional 5 seconds to max wait for thread scheduling contention and GC
-        Duration timeout = new Duration(maxWait.toMillis() + 5000, MILLISECONDS);
-        bindAsyncResponse(asyncResponse, futureTaskInfo, executor)
+        Duration timeout = new Duration(waitTime.toMillis() + 5000, MILLISECONDS);
+        bindAsyncResponse(asyncResponse, futureTaskInfo, responseExecutor)
+                .withTimeout(timeout);
+    }
+
+    @GET
+    @Path("{taskId}/status")
+    @Produces(MediaType.APPLICATION_JSON)
+    public void getTaskStatus(@PathParam("taskId") TaskId taskId,
+            @HeaderParam(PRESTO_CURRENT_STATE) TaskState currentState,
+            @HeaderParam(PRESTO_MAX_WAIT) Duration maxWait,
+            @Context UriInfo uriInfo,
+            @Suspended AsyncResponse asyncResponse)
+    {
+        requireNonNull(taskId, "taskId is null");
+
+        if (currentState == null || maxWait == null) {
+            TaskStatus taskStatus = taskManager.getTaskInfo(taskId).getTaskStatus();
+            asyncResponse.resume(taskStatus);
+            return;
+        }
+
+        Duration waitTime = randomizeWaitTime(maxWait);
+        CompletableFuture<TaskStatus> futureTaskStatus = addTimeout(
+                taskManager.getTaskStatus(taskId, currentState),
+                () -> taskManager.getTaskStatus(taskId),
+                waitTime,
+                timeoutExecutor);
+
+        // For hard timeout, add an additional 5 seconds to max wait for thread scheduling contention and GC
+        Duration timeout = new Duration(waitTime.toMillis() + 5000, MILLISECONDS);
+        bindAsyncResponse(asyncResponse, futureTaskStatus, responseExecutor)
                 .withTimeout(timeout);
     }
 
     @DELETE
     @Path("{taskId}")
-    @Produces(MediaType.APPLICATION_JSON)
-    public Response deleteTask(@PathParam("taskId") TaskId taskId,
+    public void deleteTask(@PathParam("taskId") TaskId taskId,
             @QueryParam("abort") @DefaultValue("true") boolean abort,
             @Context UriInfo uriInfo)
     {
-        checkNotNull(taskId, "taskId is null");
+        requireNonNull(taskId, "taskId is null");
 
-        TaskInfo taskInfo;
         if (abort) {
-            taskInfo = taskManager.abortTask(taskId);
+            taskManager.abortTask(taskId);
+            return;
         }
-        else {
-            taskInfo = taskManager.cancelTask(taskId);
-        }
-
-        if (shouldSummarize(uriInfo)) {
-            taskInfo = taskInfo.summarize();
-        }
-        return Response.ok(taskInfo).build();
+        taskManager.cancelTask(taskId);
     }
 
     @GET
@@ -178,50 +221,57 @@ public class TaskResource
     public void getResults(@PathParam("taskId") TaskId taskId,
             @PathParam("outputId") TaskId outputId,
             @PathParam("token") final long token,
+            @HeaderParam(PRESTO_MAX_SIZE) DataSize maxSize,
             @Suspended AsyncResponse asyncResponse)
             throws InterruptedException
     {
-        checkNotNull(taskId, "taskId is null");
-        checkNotNull(outputId, "outputId is null");
+        requireNonNull(taskId, "taskId is null");
+        requireNonNull(outputId, "outputId is null");
 
-        ListenableFuture<BufferResult> bufferResultFuture = taskManager.getTaskResults(taskId, outputId, token, DEFAULT_MAX_SIZE);
-        bufferResultFuture = MoreFutures.addTimeout(
+        long start = System.nanoTime();
+        CompletableFuture<BufferResult> bufferResultFuture = taskManager.getTaskResults(taskId, outputId, token, maxSize);
+        Duration waitTime = randomizeWaitTime(DEFAULT_MAX_WAIT_TIME);
+        bufferResultFuture = addTimeout(
                 bufferResultFuture,
-                () -> BufferResult.emptyResults(token, false),
-                DEFAULT_MAX_WAIT_TIME,
-                executor);
+                () -> BufferResult.emptyResults(taskManager.getTaskInstanceId(taskId), token, false),
+                waitTime,
+                timeoutExecutor);
 
-        ListenableFuture<Response> responseFuture = Futures.transform(bufferResultFuture, (BufferResult result) -> {
+        CompletableFuture<Response> responseFuture = bufferResultFuture.thenApply(result -> {
             List<Page> pages = result.getPages();
 
             GenericEntity<?> entity = null;
             Status status;
-            if (!pages.isEmpty()) {
-                entity = new GenericEntity<>(pages, new TypeToken<List<Page>>() {}.getType());
-                status = Status.OK;
-            }
-            else if (result.isBufferClosed()) {
-                status = Status.GONE;
+            if (pages.isEmpty()) {
+                status = Status.NO_CONTENT;
             }
             else {
-                status = Status.NO_CONTENT;
+                entity = new GenericEntity<>(pages, new TypeToken<List<Page>>() {}.getType());
+                status = Status.OK;
             }
 
             return Response.status(status)
                     .entity(entity)
+                    .header(PRESTO_TASK_INSTANCE_ID, result.getTaskInstanceId())
                     .header(PRESTO_PAGE_TOKEN, result.getToken())
                     .header(PRESTO_PAGE_NEXT_TOKEN, result.getNextToken())
+                    .header(PRESTO_BUFFER_COMPLETE, result.isBufferComplete())
                     .build();
         });
 
         // For hard timeout, add an additional 5 seconds to max wait for thread scheduling contention and GC
-        Duration timeout = new Duration(DEFAULT_MAX_WAIT_TIME.toMillis() + 5000, MILLISECONDS);
-        bindAsyncResponse(asyncResponse, responseFuture, executor)
+        Duration timeout = new Duration(waitTime.toMillis() + 5000, MILLISECONDS);
+        bindAsyncResponse(asyncResponse, responseFuture, responseExecutor)
                 .withTimeout(timeout,
                         Response.status(Status.NO_CONTENT)
+                                .header(PRESTO_TASK_INSTANCE_ID, taskManager.getTaskInstanceId(taskId))
                                 .header(PRESTO_PAGE_TOKEN, token)
                                 .header(PRESTO_PAGE_NEXT_TOKEN, token)
+                                .header(PRESTO_BUFFER_COMPLETE, false)
                                 .build());
+
+        responseFuture.whenComplete((response, exception) -> readFromOutputBufferTime.add(Duration.nanosSince(start)));
+        asyncResponse.register((CompletionCallback) throwable -> resultsRequestTime.add(Duration.nanosSince(start)));
     }
 
     @DELETE
@@ -229,8 +279,8 @@ public class TaskResource
     @Produces(MediaType.APPLICATION_JSON)
     public Response abortResults(@PathParam("taskId") TaskId taskId, @PathParam("outputId") TaskId outputId, @Context UriInfo uriInfo)
     {
-        checkNotNull(taskId, "taskId is null");
-        checkNotNull(outputId, "outputId is null");
+        requireNonNull(taskId, "taskId is null");
+        requireNonNull(outputId, "outputId is null");
 
         TaskInfo taskInfo = taskManager.abortTaskResults(taskId, outputId);
         if (shouldSummarize(uriInfo)) {
@@ -239,8 +289,29 @@ public class TaskResource
         return Response.ok(taskInfo).build();
     }
 
+    @Managed
+    @Nested
+    public TimeStat getReadFromOutputBufferTime()
+    {
+        return readFromOutputBufferTime;
+    }
+
+    @Managed
+    @Nested
+    public TimeStat getResultsRequestTime()
+    {
+        return resultsRequestTime;
+    }
+
     private static boolean shouldSummarize(UriInfo uriInfo)
     {
         return uriInfo.getQueryParameters().containsKey("summarize");
+    }
+
+    private static Duration randomizeWaitTime(Duration waitTime)
+    {
+        // Randomize in [T/2, T], so wait is not near zero and the client-supplied max wait time is respected
+        long halfWaitMillis = waitTime.toMillis() / 2;
+        return new Duration(halfWaitMillis + ThreadLocalRandom.current().nextLong(halfWaitMillis), MILLISECONDS);
     }
 }

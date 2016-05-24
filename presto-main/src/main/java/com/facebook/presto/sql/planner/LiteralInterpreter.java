@@ -13,18 +13,24 @@
  */
 package com.facebook.presto.sql.planner;
 
-import com.facebook.presto.metadata.FunctionInfo;
+import com.facebook.presto.block.BlockSerdeUtil;
 import com.facebook.presto.metadata.FunctionRegistry;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
 import com.facebook.presto.operator.scalar.VarbinaryFunctions;
 import com.facebook.presto.spi.ConnectorSession;
+import com.facebook.presto.spi.block.Block;
+import com.facebook.presto.spi.type.Decimals;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.sql.analyzer.SemanticException;
 import com.facebook.presto.sql.tree.ArithmeticUnaryExpression;
 import com.facebook.presto.sql.tree.AstVisitor;
+import com.facebook.presto.sql.tree.BinaryLiteral;
 import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.Cast;
+import com.facebook.presto.sql.tree.DecimalLiteral;
 import com.facebook.presto.sql.tree.DoubleLiteral;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
@@ -39,26 +45,33 @@ import com.facebook.presto.sql.tree.TimeLiteral;
 import com.facebook.presto.sql.tree.TimestampLiteral;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
+import com.google.common.primitives.Primitives;
+import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
+import io.airlift.slice.SliceOutput;
+import io.airlift.slice.SliceUtf8;
+import io.airlift.slice.Slices;
 
 import java.util.List;
 
+import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
+import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.INVALID_LITERAL;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.TYPE_MISMATCH;
+import static com.facebook.presto.type.JsonType.JSON;
 import static com.facebook.presto.type.UnknownType.UNKNOWN;
 import static com.facebook.presto.util.DateTimeUtils.parseDayTimeInterval;
 import static com.facebook.presto.util.DateTimeUtils.parseTime;
 import static com.facebook.presto.util.DateTimeUtils.parseTimestampLiteral;
 import static com.facebook.presto.util.DateTimeUtils.parseYearMonthInterval;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static io.airlift.slice.Slices.utf8Slice;
-import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.Objects.requireNonNull;
 
 public final class LiteralInterpreter
 {
@@ -74,8 +87,8 @@ public final class LiteralInterpreter
 
     public static List<Expression> toExpressions(List<?> objects, List<? extends Type> types)
     {
-        checkNotNull(objects, "objects is null");
-        checkNotNull(types, "types is null");
+        requireNonNull(objects, "objects is null");
+        requireNonNull(types, "types is null");
         checkArgument(objects.size() == types.size(), "objects and types do not have the same size");
 
         ImmutableList.Builder<Expression> expressions = ImmutableList.builder();
@@ -89,6 +102,8 @@ public final class LiteralInterpreter
 
     public static Expression toExpression(Object object, Type type)
     {
+        requireNonNull(type, "type is null");
+
         if (object instanceof Expression) {
             return (Expression) object;
         }
@@ -97,12 +112,22 @@ public final class LiteralInterpreter
             if (type.equals(UNKNOWN)) {
                 return new NullLiteral();
             }
-            return new Cast(new NullLiteral(), type.getTypeSignature().toString());
+            return new Cast(new NullLiteral(), type.getTypeSignature().toString(), false, true);
+        }
+
+        if (type.equals(INTEGER)) {
+            return new LongLiteral(object.toString());
         }
 
         if (type.equals(BIGINT)) {
+            LongLiteral expression = new LongLiteral(object.toString());
+            if (expression.getValue() >= Integer.MIN_VALUE && expression.getValue() <= Integer.MAX_VALUE) {
+                return new GenericLiteral("BIGINT", object.toString());
+            }
             return new LongLiteral(object.toString());
         }
+
+        checkArgument(Primitives.wrap(type.getJavaType()).isInstance(object), "object.getClass (%s) and type.getJavaType (%s) do not agree", object.getClass(), type.getJavaType());
 
         if (type.equals(DOUBLE)) {
             Double value = (Double) object;
@@ -122,21 +147,37 @@ public final class LiteralInterpreter
             }
         }
 
-        if (type.equals(VARCHAR)) {
-            if (object instanceof Slice) {
-                return new StringLiteral(((Slice) object).toString(UTF_8));
+        if (type instanceof VarcharType) {
+            if (object instanceof String) {
+                object = Slices.utf8Slice((String) object);
             }
 
-            if (object instanceof String) {
-                return new StringLiteral((String) object);
+            if (object instanceof Slice) {
+                Slice value = (Slice) object;
+                int length = SliceUtf8.countCodePoints(value);
+
+                if (length == ((VarcharType) type).getLength()) {
+                    return new StringLiteral(value.toStringUtf8());
+                }
+
+                return new Cast(new StringLiteral(value.toStringUtf8()), type.getDisplayName(), false, true);
             }
+
+            throw new IllegalArgumentException("object must be instance of Slice or String when type is VARCHAR");
         }
 
         if (type.equals(BOOLEAN)) {
             return new BooleanLiteral(object.toString());
         }
 
-        if (object instanceof Slice && !type.equals(VARCHAR)) {
+        if (object instanceof Block) {
+            SliceOutput output = new DynamicSliceOutput(((Block) object).getSizeInBytes());
+            BlockSerdeUtil.writeBlock(output, (Block) object);
+            object = output.slice();
+            // This if condition will evaluate to true: object instanceof Slice && !type.equals(VARCHAR)
+        }
+
+        if (object instanceof Slice) {
             // HACK: we need to serialize VARBINARY in a format that can be embedded in an expression to be
             // able to encode it in the plan that gets sent to workers.
             // We do this by transforming the in-memory varbinary into a call to from_base64(<base64-encoded value>)
@@ -146,7 +187,7 @@ public final class LiteralInterpreter
         }
 
         Signature signature = FunctionRegistry.getMagicLiteralFunctionSignature(type);
-        Expression rawLiteral = toExpression(object, FunctionRegistry.type(type.getJavaType()));
+        Expression rawLiteral = toExpression(object, FunctionRegistry.typeForMagicLiteral(type));
 
         return new FunctionCall(new QualifiedName(signature.getName()), ImmutableList.of(rawLiteral));
     }
@@ -186,9 +227,21 @@ public final class LiteralInterpreter
         }
 
         @Override
+        protected Object visitDecimalLiteral(DecimalLiteral node, ConnectorSession context)
+        {
+            return Decimals.parse(node.getValue()).getObject();
+        }
+
+        @Override
         protected Slice visitStringLiteral(StringLiteral node, ConnectorSession session)
         {
             return node.getSlice();
+        }
+
+        @Override
+        protected Slice visitBinaryLiteral(BinaryLiteral node, ConnectorSession session)
+        {
+            return node.getValue();
         }
 
         @Override
@@ -199,15 +252,26 @@ public final class LiteralInterpreter
                 throw new SemanticException(TYPE_MISMATCH, node, "Unknown type: " + node.getType());
             }
 
-            FunctionInfo operator;
+            if (JSON.equals(type)) {
+                ScalarFunctionImplementation operator = metadata.getFunctionRegistry().getScalarFunctionImplementation(new Signature("json_parse", SCALAR, JSON.getTypeSignature(), VARCHAR.getTypeSignature()));
+                try {
+                    return ExpressionInterpreter.invoke(session, operator, ImmutableList.<Object>of(utf8Slice(node.getValue())));
+                }
+                catch (Throwable throwable) {
+                    throw Throwables.propagate(throwable);
+                }
+            }
+
+            ScalarFunctionImplementation operator;
             try {
-                operator = metadata.getFunctionRegistry().getCoercion(VARCHAR, type);
+                Signature signature = metadata.getFunctionRegistry().getCoercion(VARCHAR, type);
+                operator = metadata.getFunctionRegistry().getScalarFunctionImplementation(signature);
             }
             catch (IllegalArgumentException e) {
                 throw new SemanticException(TYPE_MISMATCH, node, "No literal form for type %s", type);
             }
             try {
-                return ExpressionInterpreter.invoke(session, operator.getMethodHandle(), ImmutableList.<Object>of(utf8Slice(node.getValue())));
+                return ExpressionInterpreter.invoke(session, operator, ImmutableList.<Object>of(utf8Slice(node.getValue())));
             }
             catch (Throwable throwable) {
                 throw Throwables.propagate(throwable);
@@ -240,7 +304,6 @@ public final class LiteralInterpreter
             else {
                 return node.getSign().multiplier() * parseDayTimeInterval(node.getValue(), node.getStartField(), node.getEndField());
             }
-
         }
 
         @Override

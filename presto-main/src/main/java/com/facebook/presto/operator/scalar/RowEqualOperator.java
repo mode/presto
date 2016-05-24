@@ -13,53 +13,53 @@ package com.facebook.presto.operator.scalar;
  * limitations under the License.
  */
 
-import com.facebook.presto.metadata.FunctionInfo;
+import com.facebook.presto.metadata.BoundVariables;
 import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.ParametricOperator;
+import com.facebook.presto.metadata.SqlOperator;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.spi.type.TypeSignature;
 import com.google.common.collect.ImmutableList;
-import io.airlift.slice.Slice;
 
 import java.lang.invoke.MethodHandle;
-import java.util.Map;
 
-import static com.facebook.presto.metadata.FunctionRegistry.operatorInfo;
 import static com.facebook.presto.metadata.OperatorType.EQUAL;
 import static com.facebook.presto.metadata.Signature.comparableWithVariadicBound;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Reflection.methodHandle;
 
 public class RowEqualOperator
-        extends ParametricOperator
+        extends SqlOperator
 {
     public static final RowEqualOperator ROW_EQUAL = new RowEqualOperator();
-    private static final TypeSignature RETURN_TYPE = parseTypeSignature(StandardTypes.BOOLEAN);
-    private static final MethodHandle METHOD_HANDLE = methodHandle(RowEqualOperator.class, "equals", Type.class, Slice.class, Slice.class);
+    private static final MethodHandle METHOD_HANDLE = methodHandle(RowEqualOperator.class, "equals", Type.class, Block.class, Block.class);
 
     private RowEqualOperator()
     {
-        super(EQUAL, ImmutableList.of(comparableWithVariadicBound("T", "row")), StandardTypes.BOOLEAN, ImmutableList.of("T", "T"));
+        super(EQUAL,
+                ImmutableList.of(comparableWithVariadicBound("T", "row")),
+                ImmutableList.of(),
+                parseTypeSignature(StandardTypes.BOOLEAN),
+                ImmutableList.of(parseTypeSignature("T"), parseTypeSignature("T")));
     }
 
     @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
-        Type type = types.get("T");
-        TypeSignature typeSignature = type.getTypeSignature();
-        return operatorInfo(EQUAL, RETURN_TYPE, ImmutableList.of(typeSignature, typeSignature), METHOD_HANDLE.bindTo(type), false, ImmutableList.of(false, false));
+        Type type = boundVariables.getTypeVariable("T");
+        return new ScalarFunctionImplementation(false, ImmutableList.of(false, false), METHOD_HANDLE.bindTo(type), isDeterministic());
     }
 
-    public static boolean equals(Type rowType, Slice leftRow, Slice rightRow)
+    public static boolean equals(Type rowType, Block leftRow, Block rightRow)
     {
-        BlockBuilder leftBlockBuilder = rowType.createBlockBuilder(new BlockBuilderStatus(), 1, leftRow.length());
-        BlockBuilder rightBlockBuilder = rowType.createBlockBuilder(new BlockBuilderStatus(), 1, rightRow.length());
-        leftBlockBuilder.writeBytes(leftRow, 0, leftRow.length());
-        rightBlockBuilder.writeBytes(rightRow, 0, rightRow.length());
-        return rowType.equalTo(leftBlockBuilder.closeEntry().build(), 0, rightBlockBuilder.closeEntry().build(), 0);
+        // TODO: Fix this. It feels very inefficient and unnecessary to wrap and unwrap with Block
+        BlockBuilder leftBlockBuilder = rowType.createBlockBuilder(new BlockBuilderStatus(), 1);
+        BlockBuilder rightBlockBuilder = rowType.createBlockBuilder(new BlockBuilderStatus(), 1);
+        rowType.writeObject(leftBlockBuilder, leftRow);
+        rowType.writeObject(rightBlockBuilder, rightRow);
+        return rowType.equalTo(leftBlockBuilder.build(), 0, rightBlockBuilder.build(), 0);
     }
 }

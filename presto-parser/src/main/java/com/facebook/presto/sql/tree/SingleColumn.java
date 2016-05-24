@@ -13,10 +13,10 @@
  */
 package com.facebook.presto.sql.tree;
 
-import com.google.common.base.Preconditions;
-
 import java.util.Objects;
 import java.util.Optional;
+
+import static java.util.Objects.requireNonNull;
 
 public class SingleColumn
         extends SelectItem
@@ -24,23 +24,34 @@ public class SingleColumn
     private final Optional<String> alias;
     private final Expression expression;
 
+    public SingleColumn(Expression expression)
+    {
+        this(Optional.empty(), expression, Optional.empty());
+    }
+
     public SingleColumn(Expression expression, Optional<String> alias)
     {
-        Preconditions.checkNotNull(expression, "expression is null");
-        Preconditions.checkNotNull(alias, "alias is null");
-
-        this.expression = expression;
-        this.alias = alias;
+        this(Optional.empty(), expression, alias);
     }
 
     public SingleColumn(Expression expression, String alias)
     {
-        this(expression, Optional.of(alias));
+        this(Optional.empty(), expression, Optional.of(alias));
     }
 
-    public SingleColumn(Expression expression)
+    public SingleColumn(NodeLocation location, Expression expression, Optional<String> alias)
     {
-        this(expression, Optional.empty());
+        this(Optional.of(location), expression, alias);
+    }
+
+    private SingleColumn(Optional<NodeLocation> location, Expression expression, Optional<String> alias)
+    {
+        super(location);
+        requireNonNull(expression, "expression is null");
+        requireNonNull(alias, "alias is null");
+
+        this.expression = expression;
+        this.alias = alias;
     }
 
     public Optional<String> getAlias()
@@ -62,7 +73,7 @@ public class SingleColumn
         if (obj == null || getClass() != obj.getClass()) {
             return false;
         }
-        final SingleColumn other = (SingleColumn) obj;
+        SingleColumn other = (SingleColumn) obj;
         return Objects.equals(this.alias, other.alias) && Objects.equals(this.expression, other.expression);
     }
 

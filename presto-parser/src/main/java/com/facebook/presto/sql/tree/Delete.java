@@ -17,7 +17,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class Delete
         extends Statement
@@ -27,8 +27,19 @@ public class Delete
 
     public Delete(Table table, Optional<Expression> where)
     {
-        this.table = checkNotNull(table, "table is null");
-        this.where = checkNotNull(where, "where is null");
+        this(Optional.empty(), table, where);
+    }
+
+    public Delete(NodeLocation location, Table table, Optional<Expression> where)
+    {
+        this(Optional.of(location), table, where);
+    }
+
+    private Delete(Optional<NodeLocation> location, Table table, Optional<Expression> where)
+    {
+        super(location);
+        this.table = requireNonNull(table, "table is null");
+        this.where = requireNonNull(where, "where is null");
     }
 
     public Table getTable()

@@ -22,19 +22,13 @@ import com.facebook.presto.spi.ErrorCodeSupplier;
 public enum KafkaErrorCode
         implements ErrorCodeSupplier
 {
-    // Connectors can use error codes starting at EXTERNAL
-
-    /**
-     * A requested data conversion is not supported.
-     */
-    KAFKA_CONVERSION_NOT_SUPPORTED(0x0200_0000),
-    KAFKA_SPLIT_ERROR(0x0200_0001);
+    KAFKA_SPLIT_ERROR(0);
 
     private final ErrorCode errorCode;
 
     KafkaErrorCode(int code)
     {
-        errorCode = new ErrorCode(code, name());
+        errorCode = new ErrorCode(code + 0x0102_0000, name());
     }
 
     @Override

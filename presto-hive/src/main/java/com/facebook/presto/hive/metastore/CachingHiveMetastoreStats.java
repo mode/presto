@@ -29,7 +29,14 @@ public class CachingHiveMetastoreStats
     private final HiveMetastoreApiStats getPartitionsByNames = new HiveMetastoreApiStats();
     private final HiveMetastoreApiStats createTable = new HiveMetastoreApiStats();
     private final HiveMetastoreApiStats dropTable = new HiveMetastoreApiStats();
-    private final HiveMetastoreApiStats renameTable = new HiveMetastoreApiStats();
+    private final HiveMetastoreApiStats alterTable = new HiveMetastoreApiStats();
+    private final HiveMetastoreApiStats addPartitions = new HiveMetastoreApiStats();
+    private final HiveMetastoreApiStats dropPartition = new HiveMetastoreApiStats();
+    private final HiveMetastoreApiStats dropPartitionByName = new HiveMetastoreApiStats();
+    private final HiveMetastoreApiStats loadRoles = new HiveMetastoreApiStats();
+    private final HiveMetastoreApiStats getPrivilegeSet = new HiveMetastoreApiStats();
+    private final HiveMetastoreApiStats grantTablePrivileges = new HiveMetastoreApiStats();
+    private final HiveMetastoreApiStats revokeTablePrivileges = new HiveMetastoreApiStats();
 
     @Managed
     @Nested
@@ -110,8 +117,57 @@ public class CachingHiveMetastoreStats
 
     @Managed
     @Nested
-    public HiveMetastoreApiStats getRenameTable()
+    public HiveMetastoreApiStats getAlterTable()
     {
-        return renameTable;
+        return alterTable;
+    }
+
+    @Managed
+    @Nested
+    public HiveMetastoreApiStats getAddPartitions()
+    {
+        return addPartitions;
+    }
+
+    @Managed
+    @Nested
+    public HiveMetastoreApiStats getDropPartition()
+    {
+        return dropPartition;
+    }
+
+    @Managed
+    @Nested
+    public HiveMetastoreApiStats getDropPartitionByName()
+    {
+        return dropPartitionByName;
+    }
+
+    @Managed
+    @Nested
+    public HiveMetastoreApiStats getGrantTablePrivileges()
+    {
+        return grantTablePrivileges;
+    }
+
+    @Managed
+    @Nested
+    public HiveMetastoreApiStats getRevokeTablePrivileges()
+    {
+        return revokeTablePrivileges;
+    }
+
+    @Managed
+    @Nested
+    public HiveMetastoreApiStats getLoadRoles()
+    {
+        return loadRoles;
+    }
+
+    @Managed
+    @Nested
+    public HiveMetastoreApiStats getGetPrivilegeSet()
+    {
+        return getPrivilegeSet;
     }
 }

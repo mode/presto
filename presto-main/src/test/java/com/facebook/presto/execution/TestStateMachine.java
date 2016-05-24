@@ -15,7 +15,6 @@ package com.facebook.presto.execution;
 
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import io.airlift.units.Duration;
 import org.testng.annotations.AfterClass;
@@ -24,6 +23,7 @@ import org.testng.annotations.Test;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 
+import static io.airlift.concurrent.MoreFutures.tryGetFutureValue;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -228,7 +228,7 @@ public class TestStateMachine
             throws Exception
     {
         State initialState = stateMachine.get();
-        ListenableFuture<State> futureChange = stateMachine.getStateChange(initialState);
+        Future<State> futureChange = stateMachine.getStateChange(initialState);
 
         SettableFuture<State> listenerChange = SettableFuture.create();
         stateMachine.addStateChangeListener(listenerChange::set);
@@ -258,7 +258,6 @@ public class TestStateMachine
         // listeners should not be retained if we are in a terminal state
         boolean isTerminalState = stateMachine.isTerminalState(expectedState);
         if (isTerminalState) {
-            assertEquals(stateMachine.getFutureStateChanges(), ImmutableSet.of());
             assertEquals(stateMachine.getStateChangeListeners(), ImmutableSet.of());
         }
     }
@@ -267,7 +266,7 @@ public class TestStateMachine
             throws Exception
     {
         State initialState = stateMachine.get();
-        ListenableFuture<State> futureChange = stateMachine.getStateChange(initialState);
+        Future<State> futureChange = stateMachine.getStateChange(initialState);
 
         SettableFuture<State> listenerChange = SettableFuture.create();
         stateMachine.addStateChangeListener(listenerChange::set);
@@ -286,7 +285,6 @@ public class TestStateMachine
         // listeners should not be added if we are in a terminal state
         boolean isTerminalState = stateMachine.isTerminalState(initialState);
         if (isTerminalState) {
-            assertEquals(stateMachine.getFutureStateChanges(), ImmutableSet.of());
             assertEquals(stateMachine.getStateChangeListeners(), ImmutableSet.of());
         }
 
@@ -312,6 +310,10 @@ public class TestStateMachine
         futureChange.cancel(true);
         assertEquals(listenerChange.isDone(), isTerminalState);
         listenerChange.cancel(true);
+        if (isTerminalState) {
+            // in low CPU test environments it can take longer than 50ms for the waitChange future to complete
+            tryGetFutureValue(waitChange, 1, SECONDS);
+        }
         assertEquals(waitChange.isDone(), isTerminalState);
         waitChange.cancel(true);
     }

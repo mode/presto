@@ -14,9 +14,10 @@
 package com.facebook.presto.sql.tree;
 
 import java.util.Objects;
+import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public final class RenameTable
         extends Statement
@@ -26,8 +27,19 @@ public final class RenameTable
 
     public RenameTable(QualifiedName source, QualifiedName target)
     {
-        this.source = checkNotNull(source, "source name is null");
-        this.target = checkNotNull(target, "target name is null");
+        this(Optional.empty(), source, target);
+    }
+
+    public RenameTable(NodeLocation location, QualifiedName source, QualifiedName target)
+    {
+        this(Optional.of(location), source, target);
+    }
+
+    private RenameTable(Optional<NodeLocation> location, QualifiedName source, QualifiedName target)
+    {
+        super(location);
+        this.source = requireNonNull(source, "source name is null");
+        this.target = requireNonNull(target, "target name is null");
     }
 
     public QualifiedName getSource()

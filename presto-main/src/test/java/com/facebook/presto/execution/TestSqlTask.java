@@ -16,18 +16,17 @@ package com.facebook.presto.execution;
 import com.facebook.presto.OutputBuffers;
 import com.facebook.presto.ScheduledSplit;
 import com.facebook.presto.TaskSource;
-import com.facebook.presto.UnpartitionedPagePartitionFunction;
+import com.facebook.presto.client.NodeVersion;
 import com.facebook.presto.event.query.QueryMonitor;
+import com.facebook.presto.event.query.QueryMonitorConfig;
 import com.facebook.presto.execution.SharedBuffer.BufferState;
 import com.facebook.presto.memory.MemoryPool;
 import com.facebook.presto.memory.MemoryPoolId;
 import com.facebook.presto.memory.QueryContext;
-import com.facebook.presto.metadata.NodeVersion;
 import com.facebook.presto.sql.planner.LocalExecutionPlanner;
 import com.google.common.base.Functions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.event.client.NullEventClient;
 import io.airlift.json.ObjectMapperProvider;
 import io.airlift.node.NodeInfo;
@@ -36,6 +35,8 @@ import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
 import java.net.URI;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
@@ -60,7 +61,7 @@ import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 
-@Test
+@Test(singleThreaded = true)
 public class TestSqlTask
 {
     public static final TaskId OUT = new TaskId("query", "stage", "out");
@@ -75,7 +76,7 @@ public class TestSqlTask
         taskExecutor = new TaskExecutor(8, 16);
         taskExecutor.start();
 
-        taskNotificationExecutor = newScheduledThreadPool(5, threadsNamed("task-notification-%s"));
+        taskNotificationExecutor = newScheduledThreadPool(10, threadsNamed("task-notification-%s"));
 
         LocalExecutionPlanner planner = createTestingPlanner();
 
@@ -83,7 +84,7 @@ public class TestSqlTask
                 taskNotificationExecutor,
                 taskExecutor,
                 planner,
-                new QueryMonitor(new ObjectMapperProvider().get(), new NullEventClient(), new NodeInfo("test"), new NodeVersion("testVersion")),
+                new QueryMonitor(new ObjectMapperProvider().get(), new NullEventClient(), new NodeInfo("test"), new NodeVersion("testVersion"), new QueryMonitorConfig()),
                 new TaskManagerConfig());
     }
 
@@ -102,22 +103,22 @@ public class TestSqlTask
         SqlTask sqlTask = createInitialTask();
 
         TaskInfo taskInfo = sqlTask.updateTask(TEST_SESSION,
-                PLAN_FRAGMENT,
+                Optional.of(PLAN_FRAGMENT),
                 ImmutableList.<TaskSource>of(),
                 INITIAL_EMPTY_OUTPUT_BUFFERS);
-        assertEquals(taskInfo.getState(), TaskState.RUNNING);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
         taskInfo = sqlTask.getTaskInfo();
-        assertEquals(taskInfo.getState(), TaskState.RUNNING);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
         taskInfo = sqlTask.updateTask(TEST_SESSION,
-                PLAN_FRAGMENT,
+                Optional.of(PLAN_FRAGMENT),
                 ImmutableList.of(new TaskSource(TABLE_SCAN_NODE_ID, ImmutableSet.<ScheduledSplit>of(), true)),
                 INITIAL_EMPTY_OUTPUT_BUFFERS.withNoMoreBufferIds());
-        assertEquals(taskInfo.getState(), TaskState.FINISHED);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
 
         taskInfo = sqlTask.getTaskInfo();
-        assertEquals(taskInfo.getState(), TaskState.FINISHED);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
     }
 
     @Test
@@ -127,27 +128,32 @@ public class TestSqlTask
         SqlTask sqlTask = createInitialTask();
 
         TaskInfo taskInfo = sqlTask.updateTask(TEST_SESSION,
-                PLAN_FRAGMENT,
+                Optional.of(PLAN_FRAGMENT),
                 ImmutableList.of(new TaskSource(TABLE_SCAN_NODE_ID, ImmutableSet.of(SPLIT), true)),
-                INITIAL_EMPTY_OUTPUT_BUFFERS.withBuffer(OUT, new UnpartitionedPagePartitionFunction()).withNoMoreBufferIds());
-        assertEquals(taskInfo.getState(), TaskState.RUNNING);
+                INITIAL_EMPTY_OUTPUT_BUFFERS.withBuffer(OUT, 0).withNoMoreBufferIds());
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
         taskInfo = sqlTask.getTaskInfo();
-        assertEquals(taskInfo.getState(), TaskState.RUNNING);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
         BufferResult results = sqlTask.getTaskResults(OUT, 0, new DataSize(1, MEGABYTE)).get();
-        assertEquals(results.isBufferClosed(), false);
+        assertEquals(results.isBufferComplete(), false);
         assertEquals(results.getPages().size(), 1);
         assertEquals(results.getPages().get(0).getPositionCount(), 1);
 
         results = sqlTask.getTaskResults(OUT, results.getToken() + results.getPages().size(), new DataSize(1, MEGABYTE)).get();
-        assertEquals(results.isBufferClosed(), true);
+        assertEquals(results.isBufferComplete(), true);
         assertEquals(results.getPages().size(), 0);
 
-        taskInfo = sqlTask.getTaskInfo(taskInfo.getState()).get(1, SECONDS);
-        assertEquals(taskInfo.getState(), TaskState.FINISHED);
+        // complete the task by calling abort on it
+        TaskInfo info = sqlTask.abortTaskResults(OUT);
+        assertEquals(info.getOutputBuffers().getState(), BufferState.FINISHED);
+
+        taskInfo = sqlTask.getTaskInfo(taskInfo.getTaskStatus().getState()).get(1, SECONDS);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
+
         taskInfo = sqlTask.getTaskInfo();
-        assertEquals(taskInfo.getState(), TaskState.FINISHED);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
     }
 
     @Test
@@ -157,22 +163,22 @@ public class TestSqlTask
         SqlTask sqlTask = createInitialTask();
 
         TaskInfo taskInfo = sqlTask.updateTask(TEST_SESSION,
-                PLAN_FRAGMENT,
+                Optional.of(PLAN_FRAGMENT),
                 ImmutableList.<TaskSource>of(),
                 INITIAL_EMPTY_OUTPUT_BUFFERS);
-        assertEquals(taskInfo.getState(), TaskState.RUNNING);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
         assertNull(taskInfo.getStats().getEndTime());
 
         taskInfo = sqlTask.getTaskInfo();
-        assertEquals(taskInfo.getState(), TaskState.RUNNING);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
         assertNull(taskInfo.getStats().getEndTime());
 
         taskInfo = sqlTask.cancel();
-        assertEquals(taskInfo.getState(), TaskState.CANCELED);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.CANCELED);
         assertNotNull(taskInfo.getStats().getEndTime());
 
         taskInfo = sqlTask.getTaskInfo();
-        assertEquals(taskInfo.getState(), TaskState.CANCELED);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.CANCELED);
         assertNotNull(taskInfo.getStats().getEndTime());
     }
 
@@ -183,21 +189,21 @@ public class TestSqlTask
         SqlTask sqlTask = createInitialTask();
 
         TaskInfo taskInfo = sqlTask.updateTask(TEST_SESSION,
-                PLAN_FRAGMENT,
+                Optional.of(PLAN_FRAGMENT),
                 ImmutableList.of(new TaskSource(TABLE_SCAN_NODE_ID, ImmutableSet.of(SPLIT), true)),
-                INITIAL_EMPTY_OUTPUT_BUFFERS.withBuffer(OUT, new UnpartitionedPagePartitionFunction()).withNoMoreBufferIds());
-        assertEquals(taskInfo.getState(), TaskState.RUNNING);
+                INITIAL_EMPTY_OUTPUT_BUFFERS.withBuffer(OUT, 0).withNoMoreBufferIds());
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
         taskInfo = sqlTask.getTaskInfo();
-        assertEquals(taskInfo.getState(), TaskState.RUNNING);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
         sqlTask.abortTaskResults(OUT);
 
-        taskInfo = sqlTask.getTaskInfo(taskInfo.getState()).get(1, SECONDS);
-        assertEquals(taskInfo.getState(), TaskState.FINISHED);
+        taskInfo = sqlTask.getTaskInfo(taskInfo.getTaskStatus().getState()).get(1, SECONDS);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
 
         taskInfo = sqlTask.getTaskInfo();
-        assertEquals(taskInfo.getState(), TaskState.FINISHED);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
     }
 
     @Test
@@ -206,24 +212,28 @@ public class TestSqlTask
     {
         SqlTask sqlTask = createInitialTask();
 
-        OutputBuffers outputBuffers = INITIAL_EMPTY_OUTPUT_BUFFERS.withBuffer(OUT, new UnpartitionedPagePartitionFunction()).withNoMoreBufferIds();
+        OutputBuffers outputBuffers = INITIAL_EMPTY_OUTPUT_BUFFERS.withBuffer(OUT, 0).withNoMoreBufferIds();
         updateTask(sqlTask, EMPTY_SOURCES, outputBuffers);
 
-        ListenableFuture<BufferResult> bufferResult = sqlTask.getTaskResults(OUT, 0, new DataSize(1, MEGABYTE));
+        CompletableFuture<BufferResult> bufferResult = sqlTask.getTaskResults(OUT, 0, new DataSize(1, MEGABYTE));
         assertFalse(bufferResult.isDone());
 
-        // finish the task by closing the sources (no splits will ever be added)
+        // close the sources (no splits will ever be added)
         updateTask(sqlTask, ImmutableList.of(new TaskSource(TABLE_SCAN_NODE_ID, ImmutableSet.<ScheduledSplit>of(), true)), outputBuffers);
-        assertEquals(sqlTask.getTaskInfo().getState(), TaskState.FINISHED);
+
+        // finish the task by calling abort on it
+        TaskInfo taskInfo = sqlTask.abortTaskResults(OUT);
 
         // buffer will be closed by cancel event (wait for event to fire)
-        assertTrue(bufferResult.get(1, SECONDS).isBufferClosed());
+        assertTrue(bufferResult.get(1, SECONDS).isBufferComplete());
         assertEquals(sqlTask.getTaskInfo().getOutputBuffers().getState(), BufferState.FINISHED);
+        taskInfo = sqlTask.getTaskInfo(taskInfo.getTaskStatus().getState()).get(1, SECONDS);
+        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
 
         // verify the buffer is closed
         bufferResult = sqlTask.getTaskResults(OUT, 0, new DataSize(1, MEGABYTE));
         assertTrue(bufferResult.isDone());
-        assertTrue(bufferResult.get().isBufferClosed());
+        assertTrue(bufferResult.get().isBufferComplete());
     }
 
     @Test
@@ -232,20 +242,20 @@ public class TestSqlTask
     {
         SqlTask sqlTask = createInitialTask();
 
-        updateTask(sqlTask, EMPTY_SOURCES, INITIAL_EMPTY_OUTPUT_BUFFERS.withBuffer(OUT, new UnpartitionedPagePartitionFunction()));
+        updateTask(sqlTask, EMPTY_SOURCES, INITIAL_EMPTY_OUTPUT_BUFFERS.withBuffer(OUT, 0));
 
-        ListenableFuture<BufferResult> bufferResult = sqlTask.getTaskResults(OUT, 0, new DataSize(1, MEGABYTE));
+        CompletableFuture<BufferResult> bufferResult = sqlTask.getTaskResults(OUT, 0, new DataSize(1, MEGABYTE));
         assertFalse(bufferResult.isDone());
 
         sqlTask.cancel();
-        assertEquals(sqlTask.getTaskInfo().getState(), TaskState.CANCELED);
+        assertEquals(sqlTask.getTaskInfo().getTaskStatus().getState(), TaskState.CANCELED);
 
         // buffer will be closed by cancel event.. the event is async so wait a bit for event to propagate
-        assertTrue(bufferResult.get(1, SECONDS).isBufferClosed());
+        assertTrue(bufferResult.get(1, SECONDS).isBufferComplete());
 
         bufferResult = sqlTask.getTaskResults(OUT, 0, new DataSize(1, MEGABYTE));
         assertTrue(bufferResult.isDone());
-        assertTrue(bufferResult.get().isBufferClosed());
+        assertTrue(bufferResult.get().isBufferComplete());
     }
 
     @Test
@@ -254,18 +264,18 @@ public class TestSqlTask
     {
         SqlTask sqlTask = createInitialTask();
 
-        updateTask(sqlTask, EMPTY_SOURCES, INITIAL_EMPTY_OUTPUT_BUFFERS.withBuffer(OUT, new UnpartitionedPagePartitionFunction()));
+        updateTask(sqlTask, EMPTY_SOURCES, INITIAL_EMPTY_OUTPUT_BUFFERS.withBuffer(OUT, 0));
 
-        ListenableFuture<BufferResult> bufferResult = sqlTask.getTaskResults(OUT, 0, new DataSize(1, MEGABYTE));
+        CompletableFuture<BufferResult> bufferResult = sqlTask.getTaskResults(OUT, 0, new DataSize(1, MEGABYTE));
         assertFalse(bufferResult.isDone());
 
-        TaskState taskState = sqlTask.getTaskInfo().getState();
+        TaskState taskState = sqlTask.getTaskInfo().getTaskStatus().getState();
         sqlTask.failed(new Exception("test"));
-        assertEquals(sqlTask.getTaskInfo(taskState).get(1, SECONDS).getState(), TaskState.FAILED);
+        assertEquals(sqlTask.getTaskInfo(taskState).get(1, SECONDS).getTaskStatus().getState(), TaskState.FAILED);
 
         // buffer will not be closed by fail event.  event is async so wait a bit for event to fire
         try {
-            assertTrue(bufferResult.get(1, SECONDS).isBufferClosed());
+            assertTrue(bufferResult.get(1, SECONDS).isBufferComplete());
             fail("expected TimeoutException");
         }
         catch (TimeoutException expected) {
@@ -281,9 +291,8 @@ public class TestSqlTask
 
         return new SqlTask(
                 taskId,
-                "test",
                 location,
-                new QueryContext(false, new DataSize(1, MEGABYTE), new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE), false), taskNotificationExecutor),
+                new QueryContext(new QueryId("query"), new DataSize(1, MEGABYTE), new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE)), new MemoryPool(new MemoryPoolId("testSystem"), new DataSize(1, GIGABYTE)), taskNotificationExecutor),
                 sqlTaskExecutionFactory,
                 taskNotificationExecutor,
                 Functions.<SqlTask>identity(),

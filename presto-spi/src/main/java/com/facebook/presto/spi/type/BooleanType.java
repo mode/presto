@@ -61,7 +61,7 @@ public final class BooleanType
     }
 
     @Override
-    public int hash(Block block, int position)
+    public long hash(Block block, int position)
     {
         boolean value = block.getByte(position, 0) != 0;
         return value ? 1231 : 1237;
@@ -96,5 +96,17 @@ public final class BooleanType
     public void writeBoolean(BlockBuilder blockBuilder, boolean value)
     {
         blockBuilder.writeByte(value ? 1 : 0).closeEntry();
+    }
+
+    @Override
+    public boolean equals(Object other)
+    {
+        return other == BOOLEAN;
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return getClass().hashCode();
     }
 }

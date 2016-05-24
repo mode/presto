@@ -17,12 +17,14 @@ import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.block.BlockEncoding;
+import com.google.common.primitives.Ints;
 import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import org.testng.annotations.Test;
 
 import java.lang.reflect.Array;
+import java.util.List;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
@@ -43,7 +45,7 @@ import static org.testng.Assert.fail;
 @Test
 public abstract class AbstractTestBlock
 {
-    protected static <T> void assertBlock(Block block, T[] expectedValues)
+    protected <T> void assertBlock(Block block, T[] expectedValues)
     {
         assertBlockPositions(block, expectedValues);
         assertBlockPositions(copyBlock(block), expectedValues);
@@ -62,7 +64,25 @@ public abstract class AbstractTestBlock
         }
     }
 
-    private static <T> void assertBlockPositions(Block block, T[] expectedValues)
+    protected <T> void assertBlockFilteredPositions(T[] expectedValues, Block block, List<Integer> positions)
+    {
+        Block filteredBlock = block.copyPositions(positions);
+        T[] filteredExpectedValues = filter(expectedValues, positions);
+        assertEquals(filteredBlock.getPositionCount(), positions.size());
+        assertBlock(filteredBlock, filteredExpectedValues);
+    }
+
+    private static <T> T[] filter(T[] expectedValues, List<Integer> positions)
+    {
+        @SuppressWarnings("unchecked")
+        T[] prunedExpectedValues = (T[]) Array.newInstance(expectedValues.getClass().getComponentType(), positions.size());
+        for (int i = 0; i < prunedExpectedValues.length; i++) {
+            prunedExpectedValues[i] = expectedValues[positions.get(i)];
+        }
+        return prunedExpectedValues;
+    }
+
+    private <T> void assertBlockPositions(Block block, T[] expectedValues)
     {
         assertEquals(block.getPositionCount(), expectedValues.length);
         for (int position = 0; position < block.getPositionCount(); position++) {
@@ -70,7 +90,7 @@ public abstract class AbstractTestBlock
         }
     }
 
-    private static <T> void assertBlockPosition(Block block, int position, T expectedValue)
+    protected <T> void assertBlockPosition(Block block, int position, T expectedValue)
     {
         assertPositionValue(block, position, expectedValue);
         assertPositionValue(block.getSingleValueBlock(position), 0, expectedValue);
@@ -80,9 +100,10 @@ public abstract class AbstractTestBlock
         assertPositionValue(block.copyRegion(position, 1), 0, expectedValue);
         assertPositionValue(block.copyRegion(0, position + 1), position, expectedValue);
         assertPositionValue(block.copyRegion(position, block.getPositionCount() - position), 0, expectedValue);
+        assertPositionValue(block.copyPositions(Ints.asList(position)), 0, expectedValue);
     }
 
-    private static <T> void assertPositionValue(Block block, int position, T expectedValue)
+    protected static <T> void assertPositionValue(Block block, int position, T expectedValue)
     {
         if (expectedValue == null) {
             assertTrue(block.isNull(position));
@@ -125,7 +146,6 @@ public abstract class AbstractTestBlock
 
             for (int offset = 0; offset < length - 3; offset++) {
                 assertEquals(block.getSlice(position, offset, 3), expectedSliceValue.slice(offset, 3));
-                assertEquals(block.hash(position, offset, 3), expectedSliceValue.hashCode(offset, 3));
                 assertTrue(block.bytesEqual(position, offset, expectedSliceValue, offset, 3));
                 // if your tests fail here, please change your test to not use this value
                 assertFalse(block.bytesEqual(position, offset, Slices.utf8Slice("XXX"), 0, 3));
@@ -196,6 +216,15 @@ public abstract class AbstractTestBlock
         greaterOutput.writeBytes(expectedValue, offset, length);
         greaterOutput.writeByte('_');
         return greaterOutput.slice();
+    }
+
+    protected static Slice[] createExpectedValues(int positionCount)
+    {
+        Slice[] expectedValues = new Slice[positionCount];
+        for (int position = 0; position < positionCount; position++) {
+            expectedValues[position] = createExpectedValue(position);
+        }
+        return expectedValues;
     }
 
     protected static Slice createExpectedValue(int length)

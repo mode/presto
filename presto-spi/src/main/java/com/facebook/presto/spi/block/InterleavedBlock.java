@@ -13,9 +13,13 @@
  */
 package com.facebook.presto.spi.block;
 
+import org.openjdk.jol.info.ClassLayout;
+
 public class InterleavedBlock
         extends AbstractInterleavedBlock
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(InterleavedBlock.class).instanceSize();
+
     private final Block[] blocks;
     private final InterleavedBlockEncoding blockEncoding;
     private final int positionCount;
@@ -32,7 +36,7 @@ public class InterleavedBlock
         // * differs by at most one
         // * is non-ascending
         int sizeInBytes = 0;
-        int retainedSizeInBytes = 0;
+        int retainedSizeInBytes = INSTANCE_SIZE;
         int positionCount = 0;
         int firstSubBlockPositionCount = blocks[0].getPositionCount();
         boolean subBlockHasDifferentSize = false;
@@ -104,7 +108,7 @@ public class InterleavedBlock
     {
         StringBuilder sb = new StringBuilder("InterleavedBlock{");
         sb.append("columns=").append(getBlockCount());
-        sb.append(", positionCount=").append(getPositionCount());
+        sb.append(", positionCount=").append(getPositionCount() / getBlockCount());
         sb.append('}');
         return sb.toString();
     }

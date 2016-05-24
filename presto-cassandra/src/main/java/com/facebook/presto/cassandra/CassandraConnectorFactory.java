@@ -13,8 +13,9 @@
  */
 package com.facebook.presto.cassandra;
 
-import com.facebook.presto.spi.Connector;
-import com.facebook.presto.spi.ConnectorFactory;
+import com.facebook.presto.spi.ConnectorHandleResolver;
+import com.facebook.presto.spi.connector.Connector;
+import com.facebook.presto.spi.connector.ConnectorFactory;
 import com.google.common.base.Throwables;
 import com.google.inject.Binder;
 import com.google.inject.Injector;
@@ -29,8 +30,8 @@ import java.lang.management.ManagementFactory;
 import java.util.Map;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
+import static java.util.Objects.requireNonNull;
 
 public class CassandraConnectorFactory
         implements ConnectorFactory
@@ -42,7 +43,7 @@ public class CassandraConnectorFactory
     {
         checkArgument(!isNullOrEmpty(name), "name is null or empty");
         this.name = name;
-        this.optionalConfig = checkNotNull(optionalConfig, "optionalConfig is null");
+        this.optionalConfig = requireNonNull(optionalConfig, "optionalConfig is null");
     }
 
     @Override
@@ -52,9 +53,15 @@ public class CassandraConnectorFactory
     }
 
     @Override
+    public ConnectorHandleResolver getHandleResolver()
+    {
+        return new CassandraHandleResolver();
+    }
+
+    @Override
     public Connector create(String connectorId, Map<String, String> config)
     {
-        checkNotNull(config, "config is null");
+        requireNonNull(config, "config is null");
 
         try {
             Bootstrap app = new Bootstrap(

@@ -46,9 +46,9 @@ import static com.facebook.presto.orc.metadata.Stream.StreamKind.PRESENT;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.ROW_GROUP_DICTIONARY;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.ROW_GROUP_DICTIONARY_LENGTH;
 import static com.facebook.presto.orc.metadata.Stream.StreamKind.SECONDARY;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Predicates.equalTo;
 import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
 public final class Checkpoints
 {
@@ -105,6 +105,7 @@ public final class Checkpoints
                     break;
                 case BINARY:
                 case STRING:
+                case VARCHAR:
                     checkpoints.putAll(getSliceColumnCheckpoints(column, columnEncoding, compressionKind, availableStreams, columnPositionsList));
                     break;
                 case LIST:
@@ -115,8 +116,9 @@ public final class Checkpoints
                     checkpoints.putAll(getStructColumnCheckpoints(column, compressionKind, availableStreams, columnPositionsList));
                     break;
                 case DECIMAL:
+                    checkpoints.putAll(getDecimalColumnCheckpoints(column, columnEncoding, compressionKind, availableStreams, columnPositionsList));
+                    break;
                 case CHAR:
-                case VARCHAR:
                 case UNION:
                     throw new IllegalArgumentException("Unsupported column type " + columnType);
             }
@@ -373,6 +375,30 @@ public final class Checkpoints
         return checkpoints.build();
     }
 
+    private static Map<StreamId, StreamCheckpoint> getDecimalColumnCheckpoints(
+            int column,
+            ColumnEncodingKind encoding,
+            CompressionKind compressionKind,
+            Set<StreamKind> availableStreams,
+            ColumnPositionsList positionsList)
+    {
+        ImmutableMap.Builder<StreamId, StreamCheckpoint> checkpoints = ImmutableMap.builder();
+
+        if (availableStreams.contains(PRESENT)) {
+            checkpoints.put(new StreamId(column, PRESENT), new BooleanStreamCheckpoint(compressionKind, positionsList));
+        }
+
+        if (availableStreams.contains(DATA)) {
+            checkpoints.put(new StreamId(column, DATA), new DecimalStreamCheckpoint(compressionKind, positionsList));
+        }
+
+        if (availableStreams.contains(SECONDARY)) {
+            checkpoints.put(new StreamId(column, SECONDARY), createLongStreamCheckpoint(encoding, compressionKind, positionsList));
+        }
+
+        return checkpoints.build();
+    }
+
     private static StreamCheckpoint createLongStreamCheckpoint(ColumnEncodingKind encoding, CompressionKind compressionKind, ColumnPositionsList positionsList)
     {
         if (encoding == DIRECT_V2 || encoding == DICTIONARY_V2) {
@@ -400,8 +426,8 @@ public final class Checkpoints
         private ColumnPositionsList(int column, OrcTypeKind columnType, List<Integer> positionsList)
         {
             this.column = column;
-            this.columnType = checkNotNull(columnType, "columnType is null");
-            this.positionsList = ImmutableList.copyOf(checkNotNull(positionsList, "positionsList is null"));
+            this.columnType = requireNonNull(columnType, "columnType is null");
+            this.positionsList = ImmutableList.copyOf(requireNonNull(positionsList, "positionsList is null"));
         }
 
         public int getIndex()

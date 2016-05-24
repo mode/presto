@@ -25,12 +25,13 @@ import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.block.BlockBuilderStatus;
-import com.facebook.presto.spi.block.VariableWidthBlockBuilder;
+import com.facebook.presto.spi.block.InterleavedBlockBuilder;
 import com.facebook.presto.spi.type.BigintType;
 import com.facebook.presto.spi.type.DoubleType;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.spi.type.TypeSignatureParameter;
 import com.facebook.presto.spi.type.VarcharType;
 import com.facebook.presto.type.TypeRegistry;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -42,8 +43,7 @@ import java.util.Optional;
 import java.util.Random;
 
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.facebook.presto.type.TypeUtils.appendToBlockBuilder;
-import static com.facebook.presto.type.TypeUtils.buildStructuralSlice;
+import static com.facebook.presto.type.TypeJsonUtils.appendToBlockBuilder;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 
@@ -63,7 +63,7 @@ public class TestLearnAggregations
     public void testLearn()
             throws Exception
     {
-        Type mapType = typeManager.getParameterizedType("map", ImmutableList.of(parseTypeSignature(StandardTypes.BIGINT), parseTypeSignature(StandardTypes.DOUBLE)), ImmutableList.of());
+        Type mapType = typeManager.getParameterizedType("map", ImmutableList.of(TypeSignatureParameter.of(parseTypeSignature(StandardTypes.BIGINT)), TypeSignatureParameter.of(parseTypeSignature(StandardTypes.DOUBLE))));
         InternalAggregationFunction aggregation = new AggregationCompiler(typeManager).generateAggregationFunction(LearnClassifierAggregation.class, ClassifierType.BIGINT_CLASSIFIER, ImmutableList.of(BigintType.BIGINT, mapType));
         assertLearnClassifer(aggregation.bind(ImmutableList.of(0, 1), Optional.empty(), Optional.empty(), 1.0).createAccumulator());
     }
@@ -72,7 +72,7 @@ public class TestLearnAggregations
     public void testLearnLibSvm()
             throws Exception
     {
-        Type mapType = typeManager.getParameterizedType("map", ImmutableList.of(parseTypeSignature(StandardTypes.BIGINT), parseTypeSignature(StandardTypes.DOUBLE)), ImmutableList.of());
+        Type mapType = typeManager.getParameterizedType("map", ImmutableList.of(TypeSignatureParameter.of(parseTypeSignature(StandardTypes.BIGINT)), TypeSignatureParameter.of(parseTypeSignature(StandardTypes.DOUBLE))));
         InternalAggregationFunction aggregation = new AggregationCompiler(typeManager).generateAggregationFunction(LearnLibSvmClassifierAggregation.class, ClassifierType.BIGINT_CLASSIFIER, ImmutableList.of(BigintType.BIGINT, mapType, VarcharType.VARCHAR));
         assertLearnClassifer(aggregation.bind(ImmutableList.of(0, 1, 2), Optional.empty(), Optional.empty(), 1.0).createAccumulator());
     }
@@ -93,7 +93,7 @@ public class TestLearnAggregations
     private static Page getPage()
             throws JsonProcessingException
     {
-        Type mapType = typeManager.getParameterizedType("map", ImmutableList.of(parseTypeSignature(StandardTypes.BIGINT), parseTypeSignature(StandardTypes.DOUBLE)), ImmutableList.of());
+        Type mapType = typeManager.getParameterizedType("map", ImmutableList.of(TypeSignatureParameter.of(parseTypeSignature(StandardTypes.BIGINT)), TypeSignatureParameter.of(parseTypeSignature(StandardTypes.DOUBLE))));
         int datapoints = 100;
         RowPageBuilder builder = RowPageBuilder.rowPageBuilder(BigintType.BIGINT, mapType, VarcharType.VARCHAR);
         Random rand = new Random(0);
@@ -105,11 +105,11 @@ public class TestLearnAggregations
         return builder.build();
     }
 
-    private static Slice mapSliceOf(Type keyType, Type valueType, Object key, Object value)
+    private static Block mapSliceOf(Type keyType, Type valueType, Object key, Object value)
     {
-        BlockBuilder blockBuilder = new VariableWidthBlockBuilder(new BlockBuilderStatus(), 1024);
+        BlockBuilder blockBuilder = new InterleavedBlockBuilder(ImmutableList.of(keyType, valueType), new BlockBuilderStatus(), 100);
         appendToBlockBuilder(keyType, key, blockBuilder);
         appendToBlockBuilder(valueType, value, blockBuilder);
-        return buildStructuralSlice(blockBuilder);
+        return blockBuilder.build();
     }
 }

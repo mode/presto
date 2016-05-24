@@ -47,7 +47,7 @@ public class HistogramStateSerializer
             out.appendNull();
         }
         else {
-            serializedType.writeSlice(out, state.get().serialize());
+            serializedType.writeObject(out, state.get().serialize());
         }
     }
 
@@ -55,7 +55,7 @@ public class HistogramStateSerializer
     public void deserialize(Block block, int index, HistogramState state)
     {
         if (!block.isNull(index)) {
-            state.set(new TypedHistogram(serializedType.getSlice(block, index), type, EXPECTED_SIZE_FOR_HASHING));
+            state.set(new TypedHistogram((Block) serializedType.getObject(block, index), type, EXPECTED_SIZE_FOR_HASHING));
         }
     }
 }

@@ -24,7 +24,7 @@ import javax.annotation.concurrent.Immutable;
 import java.util.List;
 import java.util.Optional;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class JoinNode
@@ -47,12 +47,12 @@ public class JoinNode
             @JsonProperty("rightHashSymbol") Optional<Symbol> rightHashSymbol)
     {
         super(id);
-        checkNotNull(type, "type is null");
-        checkNotNull(left, "left is null");
-        checkNotNull(right, "right is null");
-        checkNotNull(criteria, "criteria is null");
-        checkNotNull(leftHashSymbol, "leftHashSymbol is null");
-        checkNotNull(rightHashSymbol, "rightHashSymbol is null");
+        requireNonNull(type, "type is null");
+        requireNonNull(left, "left is null");
+        requireNonNull(right, "right is null");
+        requireNonNull(criteria, "criteria is null");
+        requireNonNull(leftHashSymbol, "leftHashSymbol is null");
+        requireNonNull(rightHashSymbol, "rightHashSymbol is null");
 
         this.type = type;
         this.left = left;
@@ -67,7 +67,6 @@ public class JoinNode
         INNER("InnerJoin"),
         LEFT("LeftJoin"),
         RIGHT("RightJoin"),
-        CROSS("CrossJoin"),
         FULL("FullJoin");
 
         private final String joinLabel;
@@ -86,6 +85,8 @@ public class JoinNode
         {
             // Omit SEMI join types because they must be inferred by the planner and not part of the SQL parse tree
             switch (joinType) {
+                case CROSS:
+                case IMPLICIT:
                 case INNER:
                     return Type.INNER;
                 case LEFT:
@@ -94,9 +95,6 @@ public class JoinNode
                     return Type.RIGHT;
                 case FULL:
                     return Type.FULL;
-                case CROSS:
-                case IMPLICIT:
-                    return Type.CROSS;
                 default:
                     throw new UnsupportedOperationException("Unsupported join type: " + joinType);
             }
@@ -169,8 +167,8 @@ public class JoinNode
         @JsonCreator
         public EquiJoinClause(@JsonProperty("left") Symbol left, @JsonProperty("right") Symbol right)
         {
-            this.left = checkNotNull(left, "left is null");
-            this.right = checkNotNull(right, "right is null");
+            this.left = requireNonNull(left, "left is null");
+            this.right = requireNonNull(right, "right is null");
         }
 
         @JsonProperty("left")

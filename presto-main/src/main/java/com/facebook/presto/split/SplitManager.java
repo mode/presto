@@ -13,13 +13,11 @@
  */
 package com.facebook.presto.split;
 
-import com.facebook.presto.metadata.LegacyTableLayoutHandle;
+import com.facebook.presto.Session;
 import com.facebook.presto.metadata.TableLayoutHandle;
-import com.facebook.presto.spi.ConnectorSplit;
-import com.facebook.presto.spi.ConnectorSplitManager;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplitSource;
-import com.facebook.presto.spi.FixedSplitSource;
-import com.google.common.collect.ImmutableList;
+import com.facebook.presto.spi.connector.ConnectorSplitManager;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -36,32 +34,23 @@ public class SplitManager
         checkState(splitManagers.putIfAbsent(connectorId, connectorSplitManager) == null, "SplitManager for connector '%s' is already registered", connectorId);
     }
 
-    public SplitSource getSplits(TableLayoutHandle layout)
+    public SplitSource getSplits(Session session, TableLayoutHandle layout)
     {
         String connectorId = layout.getConnectorId();
         ConnectorSplitManager splitManager = getConnectorSplitManager(connectorId);
 
-        ConnectorSplitSource source;
-        if (layout.getConnectorHandle() instanceof LegacyTableLayoutHandle) {
-            LegacyTableLayoutHandle handle = (LegacyTableLayoutHandle) layout.getConnectorHandle();
-            if (handle.getPartitions().isEmpty()) {
-                return new ConnectorAwareSplitSource(connectorId, new FixedSplitSource(connectorId, ImmutableList.<ConnectorSplit>of()));
-            }
+        // assumes connectorId and catalog are the same
+        ConnectorSession connectorSession = session.toConnectorSession(connectorId);
 
-            source = splitManager.getPartitionSplits(handle.getTable(), handle.getPartitions());
-        }
-        else {
-            source = splitManager.getSplits(layout.getConnectorHandle());
-        }
+        ConnectorSplitSource source = splitManager.getSplits(layout.getTransactionHandle(), connectorSession, layout.getConnectorHandle());
 
-        return new ConnectorAwareSplitSource(connectorId, source);
+        return new ConnectorAwareSplitSource(connectorId, layout.getTransactionHandle(), source);
     }
 
-    public ConnectorSplitManager getConnectorSplitManager(String connectorId)
+    private ConnectorSplitManager getConnectorSplitManager(String connectorId)
     {
         ConnectorSplitManager result = splitManagers.get(connectorId);
         checkArgument(result != null, "No split manager for connector '%s'", connectorId);
-
         return result;
     }
 }

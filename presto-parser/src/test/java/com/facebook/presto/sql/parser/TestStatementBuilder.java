@@ -103,7 +103,9 @@ public class TestStatementBuilder
         printStatement("show partitions from foo where name = 'foo'");
         printStatement("show partitions from foo order by x");
         printStatement("show partitions from foo limit 10");
+        printStatement("show partitions from foo limit all");
         printStatement("show partitions from foo order by x desc limit 10");
+        printStatement("show partitions from foo order by x desc limit all");
 
         printStatement("show functions");
 
@@ -116,6 +118,7 @@ public class TestStatementBuilder
 
         printStatement("select * from foo tablesample system (10+1)");
         printStatement("select * from foo tablesample system (10) join bar tablesample bernoulli (30) on a.id = b.id");
+        printStatement("select * from foo tablesample system (10) join bar tablesample bernoulli (30) on not(a.id > b.id)");
 
         printStatement("select * from foo tablesample bernoulli (10) stratify on (id)");
         printStatement("select * from foo tablesample system (50) stratify on (id, name)");
@@ -124,7 +127,10 @@ public class TestStatementBuilder
 
         printStatement("select * from foo approximate at 90 confidence");
 
-        printStatement("create table foo as select * from abc");
+        printStatement("create table foo as (select * from abc)");
+        printStatement("create table if not exists foo as (select * from abc)");
+        printStatement("create table foo with (a = 'apple', b = 'banana') as select * from abc");
+        printStatement("create table foo as select * from abc WITH NO DATA");
         printStatement("drop table foo");
 
         printStatement("insert into foo select * from abc");
@@ -139,6 +145,9 @@ public class TestStatementBuilder
         printStatement("(table foo)");
         printStatement("(table foo) limit 10");
         printStatement("(table foo limit 5) limit 10");
+
+        printStatement("select * from a limit all");
+        printStatement("select * from a order by x limit all");
 
         printStatement("select * from a union select * from b");
         printStatement("table a union all table b");
@@ -158,14 +167,45 @@ public class TestStatementBuilder
 
         printStatement("alter table a.b.c rename column x to y");
 
+        printStatement("alter table a.b.c add column x bigint");
+
         printStatement("create table test (a boolean, b bigint, c double, d varchar, e timestamp)");
         printStatement("create table if not exists baz (a timestamp, b varchar)");
+        printStatement("create table test (a boolean, b bigint) with (a = 'apple', b = 'banana')");
         printStatement("drop table test");
 
         printStatement("create view foo as with a as (select 123) select * from a");
         printStatement("create or replace view foo as select 123 from t");
 
         printStatement("drop view foo");
+
+        printStatement("insert into t select * from t");
+        printStatement("insert into t (c1, c2) select * from t");
+
+        printStatement("start transaction");
+        printStatement("start transaction isolation level read uncommitted");
+        printStatement("start transaction isolation level read committed");
+        printStatement("start transaction isolation level repeatable read");
+        printStatement("start transaction isolation level serializable");
+        printStatement("start transaction read only");
+        printStatement("start transaction read write");
+        printStatement("start transaction isolation level read committed, read only");
+        printStatement("start transaction read only, isolation level read committed");
+        printStatement("start transaction read write, isolation level serializable");
+        printStatement("commit");
+        printStatement("commit work");
+        printStatement("rollback");
+        printStatement("rollback work");
+
+        printStatement("call foo()");
+        printStatement("call foo(123, a => 1, b => 'go', 456)");
+
+        printStatement("grant select on foo to alice with grant option");
+        printStatement("grant all privileges on foo to alice");
+        printStatement("grant delete, select on foo to public");
+        printStatement("revoke grant option for select on foo from alice");
+        printStatement("revoke all privileges on foo from alice");
+        printStatement("revoke insert, delete on foo from public"); //check support for public
     }
 
     @Test

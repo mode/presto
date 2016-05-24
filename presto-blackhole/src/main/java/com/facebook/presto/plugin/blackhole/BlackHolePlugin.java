@@ -14,39 +14,44 @@
 
 package com.facebook.presto.plugin.blackhole;
 
-import com.facebook.presto.spi.ConnectorFactory;
+import com.facebook.presto.spi.NodeManager;
 import com.facebook.presto.spi.Plugin;
+import com.facebook.presto.spi.connector.ConnectorFactory;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
 
 import javax.inject.Inject;
 
 import java.util.List;
-import java.util.Map;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 public final class BlackHolePlugin
         implements Plugin
 {
+    private NodeManager nodeManager;
     private TypeManager typeManager;
 
-    @Override
-    public void setOptionalConfig(Map<String, String> optionalConfig)
+    @Inject
+    public void setNodeManager(NodeManager nodeManager)
     {
+        this.nodeManager = requireNonNull(nodeManager, "nodeManager is null");
     }
 
     @Inject
     public void setTypeManager(TypeManager typeManager)
     {
-        this.typeManager = checkNotNull(typeManager, "typeManager is null");
+        this.typeManager = requireNonNull(typeManager, "typeManager is null");
     }
 
     @Override
     public <T> List<T> getServices(Class<T> type)
     {
         if (type == ConnectorFactory.class) {
-            return ImmutableList.of(type.cast(new BlackHoleConnectorFactory(typeManager)));
+            checkState(nodeManager != null, "NodeManager has not been set");
+            checkState(typeManager != null, "TypeManager has not been set");
+            return ImmutableList.of(type.cast(new BlackHoleConnectorFactory(nodeManager, typeManager)));
         }
         return ImmutableList.of();
     }

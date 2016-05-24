@@ -15,16 +15,22 @@ package com.facebook.presto.spi.block;
 
 import io.airlift.slice.SizeOf;
 import io.airlift.slice.Slice;
+import io.airlift.slice.SliceOutput;
 import io.airlift.slice.Slices;
+import org.openjdk.jol.info.ClassLayout;
 
 import java.util.Arrays;
+import java.util.List;
 
+import static com.facebook.presto.spi.block.BlockValidationUtil.checkValidPositions;
 import static io.airlift.slice.Slices.wrappedBooleanArray;
 import static java.util.Objects.requireNonNull;
 
 public class LazyFixedWidthBlock
         extends AbstractFixedWidthBlock
 {
+    private static final int INSTANCE_SIZE = ClassLayout.parseClass(LazyFixedWidthBlock.class).instanceSize();
+
     private final int positionCount;
     private LazyBlockLoader<LazyFixedWidthBlock> loader;
     private Slice slice;
@@ -85,7 +91,30 @@ public class LazyFixedWidthBlock
     public int getRetainedSizeInBytes()
     {
         // TODO: This should account for memory used by the loader.
-        return getSizeInBytes();
+        long size = INSTANCE_SIZE + SizeOf.sizeOf(valueIsNull);
+        if (slice != null) {
+            size += slice.getRetainedSize();
+        }
+        if (size > Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        return (int) size;
+    }
+
+    @Override
+    public Block copyPositions(List<Integer> positions)
+    {
+        checkValidPositions(positions, positionCount);
+
+        assureLoaded();
+        SliceOutput newSlice = Slices.allocate(positions.size() * fixedSize).getOutput();
+        SliceOutput newValueIsNull = Slices.allocate(positions.size()).getOutput();
+
+        for (int position : positions) {
+            newValueIsNull.appendByte(valueIsNull[position] ? 1 : 0);
+            newSlice.appendBytes(getRawSlice().getBytes(position * fixedSize, fixedSize));
+        }
+        return new FixedWidthBlock(fixedSize, positions.size(), newSlice.slice(), newValueIsNull.slice());
     }
 
     @Override

@@ -30,10 +30,10 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.configuration.ConfigBinder.configBinder;
 import static io.airlift.json.JsonCodecBinder.jsonCodecBinder;
+import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newFixedThreadPool;
 import static org.weakref.jmx.ObjectNames.generatedNameOf;
 import static org.weakref.jmx.guice.ExportBinder.newExporter;
@@ -57,8 +57,8 @@ public class CassandraClientModule
         binder.bind(CassandraSplitManager.class).in(Scopes.SINGLETON);
         binder.bind(CassandraTokenSplitManager.class).in(Scopes.SINGLETON);
         binder.bind(CassandraRecordSetProvider.class).in(Scopes.SINGLETON);
-        binder.bind(CassandraHandleResolver.class).in(Scopes.SINGLETON);
         binder.bind(CassandraConnectorRecordSinkProvider.class).in(Scopes.SINGLETON);
+        binder.bind(CassandraPartitionManager.class).in(Scopes.SINGLETON);
 
         binder.bind(CassandraThriftConnectionFactory.class).in(Scopes.SINGLETON);
 
@@ -89,12 +89,12 @@ public class CassandraClientModule
             CassandraClientConfig config,
             JsonCodec<List<ExtraColumnMetadata>> extraColumnMetadataCodec)
     {
-        checkNotNull(config, "config is null");
-        checkNotNull(extraColumnMetadataCodec, "extraColumnMetadataCodec is null");
+        requireNonNull(config, "config is null");
+        requireNonNull(extraColumnMetadataCodec, "extraColumnMetadataCodec is null");
 
         Cluster.Builder clusterBuilder = Cluster.builder();
 
-        List<String> contactPoints = checkNotNull(config.getContactPoints(), "contactPoints is null");
+        List<String> contactPoints = requireNonNull(config.getContactPoints(), "contactPoints is null");
         checkArgument(!contactPoints.isEmpty(), "empty contactPoints");
         clusterBuilder.addContactPoints(contactPoints.toArray(new String[contactPoints.size()]));
 

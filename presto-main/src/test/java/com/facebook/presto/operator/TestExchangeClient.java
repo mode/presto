@@ -36,6 +36,7 @@ import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.testing.Assertions.assertLessThan;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
@@ -77,14 +78,7 @@ public class TestExchangeClient
         processor.setComplete(location);
 
         @SuppressWarnings("resource")
-        ExchangeClient exchangeClient = new ExchangeClient(
-                blockEncodingManager,
-                new DataSize(32, Unit.MEGABYTE),
-                maxResponseSize,
-                1,
-                new Duration(1, TimeUnit.MINUTES),
-                new TestingHttpClient(processor, executor),
-                executor);
+        ExchangeClient exchangeClient = new ExchangeClient(blockEncodingManager, new DataSize(32, Unit.MEGABYTE), maxResponseSize, 1, new Duration(1, TimeUnit.MINUTES), new TestingHttpClient(processor, executor), executor, deltaMemoryInBytes -> { });
 
         exchangeClient.addLocation(location);
         exchangeClient.noMoreLocations();
@@ -103,7 +97,7 @@ public class TestExchangeClient
         assertTrue(exchangeClient.getStatus().getBufferedBytes() == 0);
 
         // client should have sent only 2 requests: one to get all pages and once to get the done signal
-        assertStatus(exchangeClient.getStatus().getPageBufferClientStatuses().get(0), location, "closed", 3, 2, 2, "not scheduled");
+        assertStatus(exchangeClient.getStatus().getPageBufferClientStatuses().get(0), location, "closed", 3, 3, 3, "not scheduled");
     }
 
     @Test(timeOut = 10000)
@@ -114,14 +108,7 @@ public class TestExchangeClient
         MockExchangeRequestProcessor processor = new MockExchangeRequestProcessor(maxResponseSize);
 
         @SuppressWarnings("resource")
-        ExchangeClient exchangeClient = new ExchangeClient(
-                blockEncodingManager,
-                new DataSize(32, Unit.MEGABYTE),
-                maxResponseSize,
-                1,
-                new Duration(1, TimeUnit.MINUTES),
-                new TestingHttpClient(processor, newCachedThreadPool(daemonThreadsNamed("test-%s"))),
-                executor);
+        ExchangeClient exchangeClient = new ExchangeClient(blockEncodingManager, new DataSize(32, Unit.MEGABYTE), maxResponseSize, 1, new Duration(1, TimeUnit.MINUTES), new TestingHttpClient(processor, newCachedThreadPool(daemonThreadsNamed("test-%s"))), executor, deltaMemoryInBytes -> { });
 
         URI location1 = URI.create("http://localhost:8081/foo");
         processor.addPage(location1, createPage(1));
@@ -137,7 +124,7 @@ public class TestExchangeClient
         assertEquals(exchangeClient.isClosed(), false);
         assertPageEquals(exchangeClient.getNextPage(new Duration(1, TimeUnit.SECONDS)), createPage(3));
 
-        assertNull(exchangeClient.getNextPage(new Duration(10, TimeUnit.MILLISECONDS)));
+        assertNull(exchangeClient.getNextPage(new Duration(10, MILLISECONDS)));
         assertEquals(exchangeClient.isClosed(), false);
 
         URI location2 = URI.create("http://localhost:8082/bar");
@@ -154,7 +141,7 @@ public class TestExchangeClient
         assertEquals(exchangeClient.isClosed(), false);
         assertPageEquals(exchangeClient.getNextPage(new Duration(1, TimeUnit.SECONDS)), createPage(6));
 
-        assertNull(exchangeClient.getNextPage(new Duration(10, TimeUnit.MILLISECONDS)));
+        assertNull(exchangeClient.getNextPage(new Duration(10, MILLISECONDS)));
         assertEquals(exchangeClient.isClosed(), false);
 
         exchangeClient.noMoreLocations();
@@ -165,8 +152,8 @@ public class TestExchangeClient
         }
 
         ImmutableMap<URI, PageBufferClientStatus> statuses = uniqueIndex(exchangeClient.getStatus().getPageBufferClientStatuses(), PageBufferClientStatus::getUri);
-        assertStatus(statuses.get(location1), location1, "closed", 3, 2, 2, "not scheduled");
-        assertStatus(statuses.get(location2), location2, "closed", 3, 2, 2, "not scheduled");
+        assertStatus(statuses.get(location1), location1, "closed", 3, 3, 3, "not scheduled");
+        assertStatus(statuses.get(location2), location2, "closed", 3, 3, 3, "not scheduled");
     }
 
     @Test
@@ -185,14 +172,7 @@ public class TestExchangeClient
         processor.setComplete(location);
 
         @SuppressWarnings("resource")
-        ExchangeClient exchangeClient = new ExchangeClient(
-                blockEncodingManager,
-                new DataSize(1, Unit.BYTE),
-                maxResponseSize,
-                1,
-                new Duration(1, TimeUnit.MINUTES),
-                new TestingHttpClient(processor, newCachedThreadPool(daemonThreadsNamed("test-%s"))),
-                executor);
+        ExchangeClient exchangeClient = new ExchangeClient(blockEncodingManager, new DataSize(1, Unit.BYTE), maxResponseSize, 1, new Duration(1, TimeUnit.MINUTES), new TestingHttpClient(processor, newCachedThreadPool(daemonThreadsNamed("test-%s"))), executor, deltaMemoryInBytes -> { });
 
         exchangeClient.addLocation(location);
         exchangeClient.noMoreLocations();
@@ -206,7 +186,7 @@ public class TestExchangeClient
         do {
             // there is no thread coordination here, so sleep is the best we can do
             assertLessThan(Duration.nanosSince(start), new Duration(5, TimeUnit.SECONDS));
-            sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
+            sleepUninterruptibly(100, MILLISECONDS);
         }
         while (exchangeClient.getStatus().getBufferedPages() == 0);
 
@@ -219,7 +199,7 @@ public class TestExchangeClient
         assertPageEquals(exchangeClient.getNextPage(new Duration(0, TimeUnit.SECONDS)), createPage(1));
         do {
             assertLessThan(Duration.nanosSince(start), new Duration(5, TimeUnit.SECONDS));
-            sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
+            sleepUninterruptibly(100, MILLISECONDS);
         }
         while (exchangeClient.getStatus().getBufferedPages() == 0);
 
@@ -232,7 +212,7 @@ public class TestExchangeClient
         assertPageEquals(exchangeClient.getNextPage(new Duration(0, TimeUnit.SECONDS)), createPage(2));
         do {
             assertLessThan(Duration.nanosSince(start), new Duration(5, TimeUnit.SECONDS));
-            sleepUninterruptibly(100, TimeUnit.MILLISECONDS);
+            sleepUninterruptibly(100, MILLISECONDS);
         }
         while (exchangeClient.getStatus().getBufferedPages() == 0);
 
@@ -249,7 +229,7 @@ public class TestExchangeClient
         assertEquals(exchangeClient.getStatus().getBufferedPages(), 0);
         assertTrue(exchangeClient.getStatus().getBufferedBytes() == 0);
         assertEquals(exchangeClient.isClosed(), true);
-        assertStatus(exchangeClient.getStatus().getPageBufferClientStatuses().get(0), location, "closed", 3, 4, 4, "not scheduled");
+        assertStatus(exchangeClient.getStatus().getPageBufferClientStatuses().get(0), location, "closed", 3, 5, 5, "not scheduled");
     }
 
     @Test
@@ -265,13 +245,7 @@ public class TestExchangeClient
         processor.addPage(location, createPage(3));
 
         @SuppressWarnings("resource")
-        ExchangeClient exchangeClient = new ExchangeClient(
-                blockEncodingManager,
-                new DataSize(1, Unit.BYTE),
-                maxResponseSize, 1,
-                new Duration(1, TimeUnit.MINUTES),
-                new TestingHttpClient(processor, newCachedThreadPool(daemonThreadsNamed("test-%s"))),
-                executor);
+        ExchangeClient exchangeClient = new ExchangeClient(blockEncodingManager, new DataSize(1, Unit.BYTE), maxResponseSize, 1, new Duration(1, TimeUnit.MINUTES), new TestingHttpClient(processor, newCachedThreadPool(daemonThreadsNamed("test-%s"))), executor, deltaMemoryInBytes -> { });
         exchangeClient.addLocation(location);
         exchangeClient.noMoreLocations();
 
@@ -281,6 +255,9 @@ public class TestExchangeClient
 
         // close client while pages are still available
         exchangeClient.close();
+        while (!exchangeClient.isFinished()) {
+            MILLISECONDS.sleep(10);
+        }
         assertEquals(exchangeClient.isClosed(), true);
         assertNull(exchangeClient.getNextPage(new Duration(0, TimeUnit.SECONDS)));
         assertEquals(exchangeClient.getStatus().getBufferedPages(), 0);

@@ -16,14 +16,16 @@ package com.facebook.presto.operator.aggregation;
 import com.facebook.presto.operator.aggregation.state.AccumulatorState;
 import com.facebook.presto.operator.aggregation.state.AccumulatorStateMetadata;
 import com.facebook.presto.operator.aggregation.state.NumericHistogramStateSerializer;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.block.BlockBuilderStatus;
 import com.facebook.presto.spi.type.DoubleType;
-import com.facebook.presto.type.MapType;
 import com.facebook.presto.type.SqlType;
 import com.google.common.primitives.Ints;
-import io.airlift.slice.Slice;
 
 import javax.validation.constraints.NotNull;
+
+import java.util.Map;
 
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static com.facebook.presto.spi.type.StandardTypes.BIGINT;
@@ -31,7 +33,7 @@ import static com.facebook.presto.spi.type.StandardTypes.DOUBLE;
 import static com.facebook.presto.util.Failures.checkCondition;
 
 @AggregationFunction("numeric_histogram")
-public class NumericHistogramAggregation
+public final class NumericHistogramAggregation
 {
     public static final int ENTRY_BUFFER_SIZE = 100;
 
@@ -81,15 +83,21 @@ public class NumericHistogramAggregation
         }
     }
 
-    @OutputFunction("map<double,double>")
+    @OutputFunction("map(double,double)")
     public static void output(State state, BlockBuilder out)
     {
         if (state.get() == null) {
             out.appendNull();
         }
         else {
-            Slice slice = MapType.toStackRepresentation(state.get().getBuckets(), DoubleType.DOUBLE, DoubleType.DOUBLE);
-            out.writeBytes(slice, 0, slice.length());
+            Map<Double, Double> value = state.get().getBuckets();
+            BlockBuilder blockBuilder = DoubleType.DOUBLE.createBlockBuilder(new BlockBuilderStatus(), value.size() * 2);
+            for (Map.Entry<Double, Double> entry : value.entrySet()) {
+                DoubleType.DOUBLE.writeDouble(blockBuilder, entry.getKey());
+                DoubleType.DOUBLE.writeDouble(blockBuilder, entry.getValue());
+            }
+            Block block = blockBuilder.build();
+            out.writeObject(block);
             out.closeEntry();
         }
     }

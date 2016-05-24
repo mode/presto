@@ -14,10 +14,13 @@
 package com.facebook.presto.jdbc;
 
 import com.facebook.presto.client.ClientSession;
+import com.facebook.presto.client.ServerInfo;
 import com.facebook.presto.client.StatementClient;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.net.HostAndPort;
+import io.airlift.units.Duration;
 
 import java.net.URI;
 import java.nio.charset.CharsetEncoder;
@@ -50,11 +53,12 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.collect.Maps.fromProperties;
 import static io.airlift.http.client.HttpUriBuilder.uriBuilder;
 import static java.nio.charset.StandardCharsets.US_ASCII;
+import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.MINUTES;
 
 public class PrestoConnection
         implements Connection
@@ -69,17 +73,16 @@ public class PrestoConnection
     private final String user;
     private final Map<String, String> clientInfo = new ConcurrentHashMap<>();
     private final Map<String, String> sessionProperties = new ConcurrentHashMap<>();
+    private final AtomicReference<String> transactionId = new AtomicReference<>();
     private final QueryExecutor queryExecutor;
 
     PrestoConnection(URI uri, String user, QueryExecutor queryExecutor)
             throws SQLException
     {
-        this.uri = checkNotNull(uri, "uri is null");
+        this.uri = requireNonNull(uri, "uri is null");
         this.address = HostAndPort.fromParts(uri.getHost(), uri.getPort());
-        this.user = checkNotNull(user, "user is null");
-        this.queryExecutor = checkNotNull(queryExecutor, "queryExecutor is null");
-        catalog.set("default");
-        schema.set("default");
+        this.user = requireNonNull(user, "user is null");
+        this.queryExecutor = requireNonNull(queryExecutor, "queryExecutor is null");
         timeZoneId.set(TimeZone.getDefault().getID());
         locale.set(Locale.getDefault());
 
@@ -414,7 +417,7 @@ public class PrestoConnection
     public void setClientInfo(String name, String value)
             throws SQLClientInfoException
     {
-        checkNotNull(name, "name is null");
+        requireNonNull(name, "name is null");
         if (value != null) {
             clientInfo.put(name, value);
         }
@@ -485,7 +488,7 @@ public class PrestoConnection
 
     public void setTimeZoneId(String timeZoneId)
     {
-        checkNotNull(timeZoneId, "timeZoneId is null");
+        requireNonNull(timeZoneId, "timeZoneId is null");
         this.timeZoneId.set(timeZoneId);
     }
 
@@ -504,8 +507,8 @@ public class PrestoConnection
      */
     public void setSessionProperty(String name, String value)
     {
-        checkNotNull(name, "name is null");
-        checkNotNull(value, "value is null");
+        requireNonNull(name, "name is null");
+        requireNonNull(value, "value is null");
         checkArgument(!name.isEmpty(), "name is empty");
 
         CharsetEncoder charsetEncoder = US_ASCII.newEncoder();
@@ -565,9 +568,14 @@ public class PrestoConnection
         return user;
     }
 
+    ServerInfo getServerInfo()
+    {
+        return queryExecutor.getServerInfo(getHttpUri());
+    }
+
     StatementClient startQuery(String sql)
     {
-        URI uri = createHttpUri(address);
+        URI uri = getHttpUri();
 
         String source = firstNonNull(clientInfo.get("ApplicationName"), "presto-jdbc");
 
@@ -580,7 +588,9 @@ public class PrestoConnection
                 timeZoneId.get(),
                 locale.get(),
                 ImmutableMap.copyOf(sessionProperties),
-                false);
+                transactionId.get(),
+                false,
+                new Duration(2, MINUTES));
 
         return queryExecutor.startQuery(session, sql);
     }
@@ -631,10 +641,16 @@ public class PrestoConnection
         }
     }
 
+    @VisibleForTesting
+    URI getHttpUri()
+    {
+        return createHttpUri(address);
+    }
+
     private static URI createHttpUri(HostAndPort address)
     {
         return uriBuilder()
-                .scheme("http")
+                .scheme((address.getPort() == 443) ? "https" : "http")
                 .host(address.getHostText())
                 .port(address.getPort())
                 .build();

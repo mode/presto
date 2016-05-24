@@ -33,9 +33,13 @@ public enum QueryState
      */
     STARTING(false),
     /**
-     * Query has at least one task in the output stage.
+     * Query has at least one running task.
      */
     RUNNING(false),
+    /**
+     * Query is finishing (e.g. commit for autocommit queries)
+     */
+    FINISHING(false),
     /**
      * Query has finished executing and all output has been consumed.
      */

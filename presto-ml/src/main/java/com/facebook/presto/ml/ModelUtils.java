@@ -31,15 +31,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.facebook.presto.type.TypeUtils.readStructuralBlock;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.slice.SizeOf.SIZE_OF_INT;
 import static io.airlift.slice.SizeOf.SIZE_OF_LONG;
 import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
 
 public final class ModelUtils
 {
@@ -86,9 +85,9 @@ public final class ModelUtils
      */
     public static Slice serialize(Model model)
     {
-        checkNotNull(model, "model is null");
+        requireNonNull(model, "model is null");
         Integer id = MODEL_SERIALIZATION_IDS.get(model.getClass());
-        checkNotNull(id, "id is null");
+        requireNonNull(id, "id is null");
         int size = HYPERPARAMETERS_OFFSET;
 
         // hyperparameters aren't implemented yet
@@ -138,7 +137,7 @@ public final class ModelUtils
 
         int id = slice.getInt(ALGORITHM_OFFSET);
         Class<? extends Model> algorithm = MODEL_SERIALIZATION_IDS.inverse().get(id);
-        checkNotNull(algorithm, "Unsupported algorith %d", id);
+        requireNonNull(algorithm, format("Unsupported algorith %d", id));
 
         int hyperparameterLength = slice.getInt(HYPERPARAMETER_LENGTH_OFFSET);
 
@@ -202,14 +201,13 @@ public final class ModelUtils
     }
 
     //TODO: instead of having this function, we should add feature extractors that extend Model and extract features from Strings
-    public static FeatureVector toFeatures(Slice map)
+    public static FeatureVector toFeatures(Block map)
     {
         Map<Integer, Double> features = new HashMap<>();
 
-        if (map != Slices.EMPTY_SLICE) {
-            Block block = readStructuralBlock(map);
-            for (int position = 0; position < block.getPositionCount(); position += 2) {
-                features.put((int) BIGINT.getLong(block, position), DOUBLE.getDouble(block, position + 1));
+        if (map != null) {
+            for (int position = 0; position < map.getPositionCount(); position += 2) {
+                features.put((int) BIGINT.getLong(map, position), DOUBLE.getDouble(map, position + 1));
             }
         }
         return new FeatureVector(features);

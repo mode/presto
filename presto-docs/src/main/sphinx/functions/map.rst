@@ -16,7 +16,9 @@ Map Functions
 
     Returns a map created using the given key/value arrays. ::
 
-        SELECT MAP(ARRAY[1,3], ARRAY[2,4]); => {1 -> 2, 3 -> 4}
+        SELECT map(ARRAY[1,3], ARRAY[2,4]); => {1 -> 2, 3 -> 4}
+
+    See also :func:`map_agg` and :func:`multimap_agg` for creating a map as an aggregation.
 
 .. function:: cardinality(x) -> bigint
     :noindex:
@@ -31,4 +33,12 @@ Map Functions
 
     Returns all the values in the map ``x``.
 
-See also :func:`map_agg` for creating a map as an aggregation.
+.. function:: map_concat(x<K,V>, y<K,V>) -> map<K,V>
+
+   Returns the union of two maps. If a key is found in both ``x`` and ``y``,
+   that key's value in the resulting map comes from ``y``.
+
+.. function:: element_at(map<K,V>, key) -> V
+    :noindex:
+
+    Returns value for given ``key``, or ``NULL`` if the key is not contained in the map.

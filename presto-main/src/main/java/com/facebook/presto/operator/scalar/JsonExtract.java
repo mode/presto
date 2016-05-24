@@ -24,7 +24,6 @@ import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
-import io.airlift.slice.Slices;
 
 import java.io.IOException;
 
@@ -36,8 +35,8 @@ import static com.fasterxml.jackson.core.JsonToken.FIELD_NAME;
 import static com.fasterxml.jackson.core.JsonToken.START_ARRAY;
 import static com.fasterxml.jackson.core.JsonToken.START_OBJECT;
 import static com.fasterxml.jackson.core.JsonToken.VALUE_NULL;
-import static com.google.common.base.Preconditions.checkNotNull;
-import static java.nio.charset.StandardCharsets.UTF_8;
+import static io.airlift.slice.Slices.utf8Slice;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Extracts values from JSON
@@ -123,12 +122,12 @@ public final class JsonExtract
 
     public static <T> T extract(Slice jsonInput, JsonExtractor<T> jsonExtractor)
     {
-        checkNotNull(jsonInput, "jsonInput is null");
+        requireNonNull(jsonInput, "jsonInput is null");
         try {
-            try (JsonParser jsonParser = JSON_FACTORY.createJsonParser(jsonInput.getInput())) {
+            try (JsonParser jsonParser = JSON_FACTORY.createParser(jsonInput.getInput())) {
                 // Initialize by advancing to first token and make sure it exists
                 if (jsonParser.nextToken() == null) {
-                    throw new JsonParseException("Missing starting token", jsonParser.getCurrentLocation());
+                    return null;
                 }
 
                 return jsonExtractor.extract(jsonParser);
@@ -191,8 +190,8 @@ public final class JsonExtract
 
         public ObjectFieldJsonExtractor(String fieldName, JsonExtractor<? extends T> delegate, boolean exceptionOnOutOfBounds)
         {
-            this.fieldName = new SerializedString(checkNotNull(fieldName, "fieldName is null"));
-            this.delegate = checkNotNull(delegate, "delegate is null");
+            this.fieldName = new SerializedString(requireNonNull(fieldName, "fieldName is null"));
+            this.delegate = requireNonNull(delegate, "delegate is null");
             this.exceptionOnOutOfBounds = exceptionOnOutOfBounds;
             this.index = tryParseInt(fieldName, -1);
         }
@@ -272,7 +271,7 @@ public final class JsonExtract
             if (!token.isScalarValue() || token == VALUE_NULL) {
                 return null;
             }
-            return Slices.wrappedBuffer(jsonParser.getText().getBytes(UTF_8));
+            return utf8Slice(jsonParser.getText());
         }
     }
 
@@ -288,7 +287,7 @@ public final class JsonExtract
             }
 
             DynamicSliceOutput dynamicSliceOutput = new DynamicSliceOutput(ESTIMATED_JSON_OUTPUT_SIZE);
-            try (JsonGenerator jsonGenerator = JSON_FACTORY.createJsonGenerator(dynamicSliceOutput)) {
+            try (JsonGenerator jsonGenerator = JSON_FACTORY.createGenerator(dynamicSliceOutput)) {
                 jsonGenerator.copyCurrentStructure(jsonParser);
             }
             return dynamicSliceOutput.slice();

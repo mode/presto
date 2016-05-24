@@ -28,7 +28,6 @@ import java.util.concurrent.Executor;
 
 import static com.facebook.presto.execution.SqlTaskExecution.createSqlTaskExecution;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_SUPPORTED;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static java.util.Objects.requireNonNull;
 
 public class SqlTaskExecutionFactory
@@ -40,7 +39,6 @@ public class SqlTaskExecutionFactory
 
     private final LocalExecutionPlanner planner;
     private final QueryMonitor queryMonitor;
-    private final DataSize maxTaskMemoryUsage;
     private final DataSize operatorPreAllocatedMemory;
     private final boolean verboseStats;
     private final boolean cpuTimerEnabled;
@@ -52,12 +50,11 @@ public class SqlTaskExecutionFactory
             QueryMonitor queryMonitor,
             TaskManagerConfig config)
     {
-        this.taskNotificationExecutor = checkNotNull(taskNotificationExecutor, "taskNotificationExecutor is null");
-        this.taskExecutor = checkNotNull(taskExecutor, "taskExecutor is null");
-        this.planner = checkNotNull(planner, "planner is null");
-        this.queryMonitor = checkNotNull(queryMonitor, "queryMonitor is null");
+        this.taskNotificationExecutor = requireNonNull(taskNotificationExecutor, "taskNotificationExecutor is null");
+        this.taskExecutor = requireNonNull(taskExecutor, "taskExecutor is null");
+        this.planner = requireNonNull(planner, "planner is null");
+        this.queryMonitor = requireNonNull(queryMonitor, "queryMonitor is null");
         requireNonNull(config, "config is null");
-        this.maxTaskMemoryUsage = config.getMaxTaskMemoryUsage();
         this.operatorPreAllocatedMemory = config.getOperatorPreAllocatedMemory();
         this.verboseStats = config.isVerboseStats();
         this.cpuTimerEnabled = config.isTaskCpuTimerEnabled();
@@ -69,8 +66,7 @@ public class SqlTaskExecutionFactory
         TaskContext taskContext = queryContext.addTaskContext(
                 taskStateMachine,
                 session,
-                maxTaskMemoryUsage,
-                checkNotNull(operatorPreAllocatedMemory, "operatorPreAllocatedMemory is null"),
+                requireNonNull(operatorPreAllocatedMemory, "operatorPreAllocatedMemory is null"),
                 verboseStats,
                 cpuTimerEnabled);
 

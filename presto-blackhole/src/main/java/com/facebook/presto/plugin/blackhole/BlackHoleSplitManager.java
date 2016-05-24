@@ -14,18 +14,36 @@
 
 package com.facebook.presto.plugin.blackhole;
 
-import com.facebook.presto.spi.ConnectorSplitManager;
+import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.ConnectorSplitSource;
 import com.facebook.presto.spi.ConnectorTableLayoutHandle;
 import com.facebook.presto.spi.FixedSplitSource;
+import com.facebook.presto.spi.connector.ConnectorSplitManager;
+import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.google.common.collect.ImmutableList;
+
+import static com.facebook.presto.plugin.blackhole.Types.checkType;
 
 public final class BlackHoleSplitManager
         implements ConnectorSplitManager
 {
     @Override
-    public ConnectorSplitSource getSplits(ConnectorTableLayoutHandle layout)
+    public ConnectorSplitSource getSplits(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorTableLayoutHandle layoutHandle)
     {
-        return new FixedSplitSource("blackhole-splitsource", ImmutableList.of());
+        BlackHoleTableLayoutHandle layout = checkType(
+                layoutHandle,
+                BlackHoleTableLayoutHandle.class,
+                "BlackHoleTableLayoutHandle");
+
+        ImmutableList.Builder<BlackHoleSplit> builder = ImmutableList.<BlackHoleSplit>builder();
+
+        for (int i = 0; i < layout.getSplitCount(); i++) {
+            builder.add(
+                    new BlackHoleSplit(
+                            layout.getPagesPerSplit(),
+                            layout.getRowsPerPage(),
+                            layout.getFieldsLength()));
+        }
+        return new FixedSplitSource("blackhole", builder.build());
     }
 }

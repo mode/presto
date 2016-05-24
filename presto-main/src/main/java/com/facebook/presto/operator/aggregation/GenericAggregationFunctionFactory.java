@@ -15,18 +15,18 @@ package com.facebook.presto.operator.aggregation;
 
 import com.facebook.presto.metadata.FunctionFactory;
 import com.facebook.presto.metadata.FunctionListBuilder;
-import com.facebook.presto.metadata.ParametricFunction;
+import com.facebook.presto.metadata.SqlFunction;
 import com.facebook.presto.spi.type.TypeManager;
 import com.google.common.collect.ImmutableList;
 
 import java.util.List;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class GenericAggregationFunctionFactory
         implements FunctionFactory
 {
-    private final List<ParametricFunction> aggregations;
+    private final List<SqlFunction> aggregations;
 
     public static GenericAggregationFunctionFactory fromAggregationDefinition(Class<?> clazz, TypeManager typeManager)
     {
@@ -38,13 +38,13 @@ public class GenericAggregationFunctionFactory
         return new GenericAggregationFunctionFactory(builder.getFunctions());
     }
 
-    private GenericAggregationFunctionFactory(List<ParametricFunction> aggregations)
+    private GenericAggregationFunctionFactory(List<SqlFunction> aggregations)
     {
-        this.aggregations = ImmutableList.copyOf(checkNotNull(aggregations, "aggregations is null"));
+        this.aggregations = ImmutableList.copyOf(requireNonNull(aggregations, "aggregations is null"));
     }
 
     @Override
-    public List<ParametricFunction> listFunctions()
+    public List<SqlFunction> listFunctions()
     {
         return aggregations;
     }

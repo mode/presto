@@ -25,6 +25,7 @@ import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.airlift.units.MinDataSize;
 import io.airlift.units.MinDuration;
+import org.joda.time.DateTimeZone;
 
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
@@ -39,12 +40,13 @@ import static io.airlift.units.DataSize.Unit.MEGABYTE;
 @DefunctConfig({
         "hive.file-system-cache-ttl",
         "hive.max-global-split-iterator-threads",
+        "hive.optimized-reader.enabled"
 })
 public class HiveClientConfig
 {
     private static final Splitter SPLITTER = Splitter.on(',').trimResults().omitEmptyStrings();
 
-    private TimeZone timeZone = TimeZone.getDefault();
+    private String timeZone = TimeZone.getDefault().getID();
 
     private DataSize maxSplitSize = new DataSize(64, MEGABYTE);
     private int maxOutstandingSplits = 1_000;
@@ -53,10 +55,16 @@ public class HiveClientConfig
     private int maxPartitionBatchSize = 100;
     private int maxInitialSplits = 200;
     private DataSize maxInitialSplitSize;
+    private int domainCompactionThreshold = 100;
     private boolean forceLocalScheduling;
     private boolean recursiveDirWalkerEnabled;
+
+    private int maxConcurrentFileRenames = 20;
+
+    private boolean allowAddColumn;
     private boolean allowDropTable;
     private boolean allowRenameTable;
+    private boolean allowRenameColumn;
 
     private boolean allowCorruptWritesForTesting;
 
@@ -76,6 +84,7 @@ public class HiveClientConfig
     private String s3AwsSecretKey;
     private boolean s3UseInstanceCredentials = true;
     private boolean s3SslEnabled = true;
+    private boolean s3SseEnabled;
     private int s3MaxClientRetries = 3;
     private int s3MaxErrorRetries = 10;
     private Duration s3MaxBackoffTime = new Duration(10, TimeUnit.MINUTES);
@@ -87,18 +96,36 @@ public class HiveClientConfig
     private DataSize s3MultipartMinFileSize = new DataSize(16, MEGABYTE);
     private DataSize s3MultipartMinPartSize = new DataSize(5, MEGABYTE);
     private boolean useParquetColumnNames;
+    private boolean pinS3ClientToCurrentRegion;
 
     private HiveStorageFormat hiveStorageFormat = HiveStorageFormat.RCBINARY;
+    private HiveCompressionCodec hiveCompressionCodec = HiveCompressionCodec.GZIP;
+    private boolean respectTableFormat = true;
+    private boolean immutablePartitions;
+    private int maxPartitionsPerWriter = 100;
 
     private List<String> resourceConfigFiles;
 
-    private boolean optimizedReaderEnabled = true;
+    private boolean parquetOptimizedReaderEnabled;
+
+    private boolean parquetPredicatePushdownEnabled;
 
     private boolean assumeCanonicalPartitionKeys;
 
+    private boolean useOrcColumnNames;
     private DataSize orcMaxMergeDistance = new DataSize(1, MEGABYTE);
     private DataSize orcMaxBufferSize = new DataSize(8, MEGABYTE);
     private DataSize orcStreamBufferSize = new DataSize(8, MEGABYTE);
+
+    private HiveMetastoreAuthenticationType hiveMetastoreAuthenticationType = HiveMetastoreAuthenticationType.NONE;
+    private String hiveMetastoreServicePrincipal;
+    private String hiveMetastoreClientPrincipal;
+    private String hiveMetastoreClientKeytab;
+
+    private HdfsAuthenticationType hdfsAuthenticationType = HdfsAuthenticationType.NONE;
+    private boolean hdfsImpersonationEnabled;
+    private String hdfsPrestoPrincipal;
+    private String hdfsPrestoKeytab;
 
     public int getMaxInitialSplits()
     {
@@ -127,6 +154,20 @@ public class HiveClientConfig
         return this;
     }
 
+    @Min(1)
+    public int getDomainCompactionThreshold()
+    {
+        return domainCompactionThreshold;
+    }
+
+    @Config("hive.domain-compaction-threshold")
+    @ConfigDescription("Maximum ranges to allow in a tuple domain without compacting it")
+    public HiveClientConfig setDomainCompactionThreshold(int domainCompactionThreshold)
+    {
+        this.domainCompactionThreshold = domainCompactionThreshold;
+        return this;
+    }
+
     public boolean isForceLocalScheduling()
     {
         return forceLocalScheduling;
@@ -139,10 +180,17 @@ public class HiveClientConfig
         return this;
     }
 
-    @NotNull
-    public TimeZone getTimeZone()
+    @Min(1)
+    public int getMaxConcurrentFileRenames()
     {
-        return timeZone;
+        return maxConcurrentFileRenames;
+    }
+
+    @Config("hive.max-concurrent-file-renames")
+    public HiveClientConfig setMaxConcurrentFileRenames(int maxConcurrentFileRenames)
+    {
+        this.maxConcurrentFileRenames = maxConcurrentFileRenames;
+        return this;
     }
 
     @Config("hive.recursive-directories")
@@ -157,16 +205,21 @@ public class HiveClientConfig
         return recursiveDirWalkerEnabled;
     }
 
+    public DateTimeZone getDateTimeZone()
+    {
+        return DateTimeZone.forTimeZone(TimeZone.getTimeZone(timeZone));
+    }
+
+    @NotNull
+    public String getTimeZone()
+    {
+        return timeZone;
+    }
+
     @Config("hive.time-zone")
     public HiveClientConfig setTimeZone(String id)
     {
-        this.timeZone = (id == null) ? TimeZone.getDefault() : TimeZone.getTimeZone(id);
-        return this;
-    }
-
-    public HiveClientConfig setTimeZone(TimeZone timeZone)
-    {
-        this.timeZone = (timeZone == null) ? TimeZone.getDefault() : timeZone;
+        this.timeZone = (id != null) ? id : TimeZone.getDefault().getID();
         return this;
     }
 
@@ -222,6 +275,19 @@ public class HiveClientConfig
         return this;
     }
 
+    public boolean getAllowRenameColumn()
+    {
+        return this.allowRenameColumn;
+    }
+
+    @Config("hive.allow-rename-column")
+    @ConfigDescription("Allow hive connector to rename column")
+    public HiveClientConfig setAllowRenameColumn(boolean allowRenameColumn)
+    {
+        this.allowRenameColumn = allowRenameColumn;
+        return this;
+    }
+
     @Deprecated
     public boolean getAllowCorruptWritesForTesting()
     {
@@ -234,6 +300,19 @@ public class HiveClientConfig
     public HiveClientConfig setAllowCorruptWritesForTesting(boolean allowCorruptWritesForTesting)
     {
         this.allowCorruptWritesForTesting = allowCorruptWritesForTesting;
+        return this;
+    }
+
+    public boolean getAllowAddColumn()
+    {
+        return this.allowAddColumn;
+    }
+
+    @Config("hive.allow-add-column")
+    @ConfigDescription("Allow Hive connector to add column")
+    public HiveClientConfig setAllowAddColumn(boolean allowAddColumn)
+    {
+        this.allowAddColumn = allowAddColumn;
         return this;
     }
 
@@ -411,6 +490,58 @@ public class HiveClientConfig
         return this;
     }
 
+    public HiveCompressionCodec getHiveCompressionCodec()
+    {
+        return hiveCompressionCodec;
+    }
+
+    @Config("hive.compression-codec")
+    public HiveClientConfig setHiveCompressionCodec(HiveCompressionCodec hiveCompressionCodec)
+    {
+        this.hiveCompressionCodec = hiveCompressionCodec;
+        return this;
+    }
+
+    public boolean isRespectTableFormat()
+    {
+        return respectTableFormat;
+    }
+
+    @Config("hive.respect-table-format")
+    @ConfigDescription("Should new partitions be written using the existing table format or the default Presto format")
+    public HiveClientConfig setRespectTableFormat(boolean respectTableFormat)
+    {
+        this.respectTableFormat = respectTableFormat;
+        return this;
+    }
+
+    public boolean isImmutablePartitions()
+    {
+        return immutablePartitions;
+    }
+
+    @Config("hive.immutable-partitions")
+    @ConfigDescription("Can new data be inserted into existing partitions or existing unpartitioned tables")
+    public HiveClientConfig setImmutablePartitions(boolean immutablePartitions)
+    {
+        this.immutablePartitions = immutablePartitions;
+        return this;
+    }
+
+    @Min(1)
+    public int getMaxPartitionsPerWriter()
+    {
+        return maxPartitionsPerWriter;
+    }
+
+    @Config("hive.max-partitions-per-writers")
+    @ConfigDescription("Maximum number of partitions per writer")
+    public HiveClientConfig setMaxPartitionsPerWriter(int maxPartitionsPerWriter)
+    {
+        this.maxPartitionsPerWriter = maxPartitionsPerWriter;
+        return this;
+    }
+
     public String getDomainSocketPath()
     {
         return domainSocketPath;
@@ -481,6 +612,19 @@ public class HiveClientConfig
     public HiveClientConfig setS3SslEnabled(boolean s3SslEnabled)
     {
         this.s3SslEnabled = s3SslEnabled;
+        return this;
+    }
+
+    public boolean isS3SseEnabled()
+    {
+        return s3SseEnabled;
+    }
+
+    @Config("hive.s3.sse.enabled")
+    @ConfigDescription("Enable S3 server side encryption")
+    public HiveClientConfig setS3SseEnabled(boolean s3SseEnabled)
+    {
+        this.s3SseEnabled = s3SseEnabled;
         return this;
     }
 
@@ -623,17 +767,57 @@ public class HiveClientConfig
         return this;
     }
 
-    @Deprecated
-    public boolean isOptimizedReaderEnabled()
+    public boolean isPinS3ClientToCurrentRegion()
     {
-        return optimizedReaderEnabled;
+        return pinS3ClientToCurrentRegion;
+    }
+
+    @Config("hive.s3.pin-client-to-current-region")
+    @ConfigDescription("Should the S3 client be pinned to the current EC2 region")
+    public HiveClientConfig setPinS3ClientToCurrentRegion(boolean pinS3ClientToCurrentRegion)
+    {
+        this.pinS3ClientToCurrentRegion = pinS3ClientToCurrentRegion;
+        return this;
     }
 
     @Deprecated
-    @Config("hive.optimized-reader.enabled")
-    public HiveClientConfig setOptimizedReaderEnabled(boolean optimizedReaderEnabled)
+    public boolean isParquetPredicatePushdownEnabled()
     {
-        this.optimizedReaderEnabled = optimizedReaderEnabled;
+        return parquetPredicatePushdownEnabled;
+    }
+
+    @Deprecated
+    @Config("hive.parquet-predicate-pushdown.enabled")
+    public HiveClientConfig setParquetPredicatePushdownEnabled(boolean parquetPredicatePushdownEnabled)
+    {
+        this.parquetPredicatePushdownEnabled = parquetPredicatePushdownEnabled;
+        return this;
+    }
+
+    @Deprecated
+    public boolean isParquetOptimizedReaderEnabled()
+    {
+        return parquetOptimizedReaderEnabled;
+    }
+
+    @Deprecated
+    @Config("hive.parquet-optimized-reader.enabled")
+    public HiveClientConfig setParquetOptimizedReaderEnabled(boolean parquetOptimizedReaderEnabled)
+    {
+        this.parquetOptimizedReaderEnabled = parquetOptimizedReaderEnabled;
+        return this;
+    }
+
+    public boolean isUseOrcColumnNames()
+    {
+        return useOrcColumnNames;
+    }
+
+    @Config("hive.orc.use-column-names")
+    @ConfigDescription("Access ORC columns using names from the file")
+    public HiveClientConfig setUseOrcColumnNames(boolean useOrcColumnNames)
+    {
+        this.useOrcColumnNames = useOrcColumnNames;
         return this;
     }
 
@@ -689,7 +873,7 @@ public class HiveClientConfig
     }
 
     public boolean isUseParquetColumnNames()
-   {
+    {
         return useParquetColumnNames;
     }
 
@@ -698,6 +882,122 @@ public class HiveClientConfig
     public HiveClientConfig setUseParquetColumnNames(boolean useParquetColumnNames)
     {
         this.useParquetColumnNames = useParquetColumnNames;
+        return this;
+    }
+
+    public enum HiveMetastoreAuthenticationType
+    {
+        NONE,
+        KERBEROS
+    }
+
+    public HiveMetastoreAuthenticationType getHiveMetastoreAuthenticationType()
+    {
+        return hiveMetastoreAuthenticationType;
+    }
+
+    @Config("hive.metastore.authentication.type")
+    @ConfigDescription("Hive Metastore authentication type")
+    public HiveClientConfig setHiveMetastoreAuthenticationType(HiveMetastoreAuthenticationType hiveMetastoreAuthenticationType)
+    {
+        this.hiveMetastoreAuthenticationType = hiveMetastoreAuthenticationType;
+        return this;
+    }
+
+    public String getHiveMetastoreServicePrincipal()
+    {
+        return hiveMetastoreServicePrincipal;
+    }
+
+    @Config("hive.metastore.service.principal")
+    @ConfigDescription("Hive Metastore service principal")
+    public HiveClientConfig setHiveMetastoreServicePrincipal(String hiveMetastoreServicePrincipal)
+    {
+        this.hiveMetastoreServicePrincipal = hiveMetastoreServicePrincipal;
+        return this;
+    }
+
+    public String getHiveMetastoreClientPrincipal()
+    {
+        return hiveMetastoreClientPrincipal;
+    }
+
+    @Config("hive.metastore.client.principal")
+    @ConfigDescription("Hive Metastore client principal")
+    public HiveClientConfig setHiveMetastoreClientPrincipal(String hiveMetastoreClientPrincipal)
+    {
+        this.hiveMetastoreClientPrincipal = hiveMetastoreClientPrincipal;
+        return this;
+    }
+
+    public String getHiveMetastoreClientKeytab()
+    {
+        return hiveMetastoreClientKeytab;
+    }
+
+    @Config("hive.metastore.client.keytab")
+    @ConfigDescription("Hive Metastore client keytab location")
+    public HiveClientConfig setHiveMetastoreClientKeytab(String hiveMetastoreClientKeytab)
+    {
+        this.hiveMetastoreClientKeytab = hiveMetastoreClientKeytab;
+        return this;
+    }
+
+    public enum HdfsAuthenticationType
+    {
+        NONE,
+        KERBEROS,
+    }
+
+    public HdfsAuthenticationType getHdfsAuthenticationType()
+    {
+        return hdfsAuthenticationType;
+    }
+
+    @Config("hive.hdfs.authentication.type")
+    @ConfigDescription("HDFS authentication type")
+    public HiveClientConfig setHdfsAuthenticationType(HdfsAuthenticationType hdfsAuthenticationType)
+    {
+        this.hdfsAuthenticationType = hdfsAuthenticationType;
+        return this;
+    }
+
+    public boolean isHdfsImpersonationEnabled()
+    {
+        return hdfsImpersonationEnabled;
+    }
+
+    @Config("hive.hdfs.impersonation.enabled")
+    @ConfigDescription("Should Presto user be impersonated when communicating with HDFS")
+    public HiveClientConfig setHdfsImpersonationEnabled(boolean hdfsImpersonationEnabled)
+    {
+        this.hdfsImpersonationEnabled = hdfsImpersonationEnabled;
+        return this;
+    }
+
+    public String getHdfsPrestoPrincipal()
+    {
+        return hdfsPrestoPrincipal;
+    }
+
+    @Config("hive.hdfs.presto.principal")
+    @ConfigDescription("Presto principal used to access HDFS")
+    public HiveClientConfig setHdfsPrestoPrincipal(String hdfsPrestoPrincipal)
+    {
+        this.hdfsPrestoPrincipal = hdfsPrestoPrincipal;
+        return this;
+    }
+
+    public String getHdfsPrestoKeytab()
+    {
+        return hdfsPrestoKeytab;
+    }
+
+    @Config("hive.hdfs.presto.keytab")
+    @ConfigDescription("Presto keytab used to access HDFS")
+    public HiveClientConfig setHdfsPrestoKeytab(String hdfsPrestoKeytab)
+    {
+        this.hdfsPrestoKeytab = hdfsPrestoKeytab;
         return this;
     }
 }

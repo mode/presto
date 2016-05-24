@@ -13,9 +13,10 @@
  */
 package com.facebook.presto.spi;
 
+@Deprecated
 public interface ConnectorPageSinkProvider
 {
-    ConnectorPageSink createPageSink(ConnectorOutputTableHandle outputTableHandle);
+    ConnectorPageSink createPageSink(ConnectorSession session, ConnectorOutputTableHandle outputTableHandle);
 
-    ConnectorPageSink createPageSink(ConnectorInsertTableHandle insertTableHandle);
+    ConnectorPageSink createPageSink(ConnectorSession session, ConnectorInsertTableHandle insertTableHandle);
 }

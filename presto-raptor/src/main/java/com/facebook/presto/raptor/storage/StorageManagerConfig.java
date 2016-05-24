@@ -20,6 +20,7 @@ import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.airlift.units.MaxDataSize;
 import io.airlift.units.MinDataSize;
+import io.airlift.units.MinDuration;
 
 import javax.validation.constraints.Max;
 import javax.validation.constraints.Min;
@@ -29,6 +30,8 @@ import java.io.File;
 import java.util.concurrent.TimeUnit;
 
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static java.lang.Math.max;
+import static java.lang.Runtime.getRuntime;
 
 @DefunctConfig("storage.backup-directory")
 public class StorageManagerConfig
@@ -36,16 +39,20 @@ public class StorageManagerConfig
     private File dataDirectory;
     private Duration shardRecoveryTimeout = new Duration(30, TimeUnit.SECONDS);
     private Duration missingShardDiscoveryInterval = new Duration(5, TimeUnit.MINUTES);
+    private boolean compactionEnabled = true;
     private Duration compactionInterval = new Duration(1, TimeUnit.HOURS);
+    private Duration shardEjectorInterval = new Duration(4, TimeUnit.HOURS);
     private DataSize orcMaxMergeDistance = new DataSize(1, MEGABYTE);
     private DataSize orcMaxReadSize = new DataSize(8, MEGABYTE);
     private DataSize orcStreamBufferSize = new DataSize(8, MEGABYTE);
+    private int deletionThreads = max(1, getRuntime().availableProcessors() / 2);
     private int recoveryThreads = 10;
     private int compactionThreads = 5;
 
     private long maxShardRows = 1_000_000;
     private DataSize maxShardSize = new DataSize(256, MEGABYTE);
     private DataSize maxBufferSize = new DataSize(256, MEGABYTE);
+    private int oneSplitPerBucketThreshold;
 
     @NotNull
     public File getDataDirectory()
@@ -100,6 +107,20 @@ public class StorageManagerConfig
         return this;
     }
 
+    @Min(1)
+    public int getDeletionThreads()
+    {
+        return deletionThreads;
+    }
+
+    @Config("storage.max-deletion-threads")
+    @ConfigDescription("Maximum number of threads to use for deletions")
+    public StorageManagerConfig setDeletionThreads(int deletionThreads)
+    {
+        this.deletionThreads = deletionThreads;
+        return this;
+    }
+
     public Duration getShardRecoveryTimeout()
     {
         return shardRecoveryTimeout;
@@ -136,6 +157,20 @@ public class StorageManagerConfig
     public StorageManagerConfig setCompactionInterval(Duration compactionInterval)
     {
         this.compactionInterval = compactionInterval;
+        return this;
+    }
+
+    @MinDuration("5m")
+    public Duration getShardEjectorInterval()
+    {
+        return shardEjectorInterval;
+    }
+
+    @Config("storage.ejector-interval")
+    @ConfigDescription("How often to check for local shards that need ejection to balance capacity")
+    public StorageManagerConfig setShardEjectorInterval(Duration shardEjectorInterval)
+    {
+        this.shardEjectorInterval = shardEjectorInterval;
         return this;
     }
 
@@ -208,6 +243,31 @@ public class StorageManagerConfig
     public StorageManagerConfig setMaxBufferSize(DataSize maxBufferSize)
     {
         this.maxBufferSize = maxBufferSize;
+        return this;
+    }
+
+    public boolean isCompactionEnabled()
+    {
+        return compactionEnabled;
+    }
+
+    @Config("storage.compaction-enabled")
+    public StorageManagerConfig setCompactionEnabled(boolean compactionEnabled)
+    {
+        this.compactionEnabled = compactionEnabled;
+        return this;
+    }
+
+    public int getOneSplitPerBucketThreshold()
+    {
+        return oneSplitPerBucketThreshold;
+    }
+
+    @Config("storage.one-split-per-bucket-threshold")
+    @ConfigDescription("Experimental: Maximum bucket count at which to produce multiple splits per bucket")
+    public StorageManagerConfig setOneSplitPerBucketThreshold(int oneSplitPerBucketThreshold)
+    {
+        this.oneSplitPerBucketThreshold = oneSplitPerBucketThreshold;
         return this;
     }
 }

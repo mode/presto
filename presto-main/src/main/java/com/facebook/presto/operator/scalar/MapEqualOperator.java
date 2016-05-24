@@ -12,75 +12,51 @@ package com.facebook.presto.operator.scalar;
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import com.facebook.presto.metadata.FunctionInfo;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.ParametricOperator;
+
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.spi.type.TypeSignature;
+import com.facebook.presto.type.SqlType;
 import com.google.common.base.Throwables;
-import com.google.common.collect.ImmutableList;
-import io.airlift.slice.Slice;
+
+import javax.annotation.Nullable;
 
 import java.lang.invoke.MethodHandle;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import static com.facebook.presto.metadata.FunctionRegistry.operatorInfo;
 import static com.facebook.presto.metadata.OperatorType.EQUAL;
 import static com.facebook.presto.metadata.OperatorType.HASH_CODE;
-import static com.facebook.presto.metadata.Signature.comparableTypeParameter;
 import static com.facebook.presto.spi.StandardErrorCode.INTERNAL_ERROR;
-import static com.facebook.presto.type.TypeUtils.readStructuralBlock;
-import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.facebook.presto.type.TypeUtils.castValue;
-import static com.facebook.presto.util.Reflection.methodHandle;
+import static com.facebook.presto.spi.type.TypeUtils.readNativeValue;
 
-public class MapEqualOperator
-        extends ParametricOperator
+@ScalarOperator(EQUAL)
+public final class MapEqualOperator
 {
-    public static final MapEqualOperator MAP_EQUAL = new MapEqualOperator();
-    private static final TypeSignature RETURN_TYPE = parseTypeSignature(StandardTypes.BOOLEAN);
+    private MapEqualOperator() {}
 
-    private MapEqualOperator()
+    @TypeParameter("K")
+    @TypeParameter("V")
+    @Nullable
+    @SqlType(StandardTypes.BOOLEAN)
+    public static Boolean equals(
+            @OperatorDependency(operator = EQUAL, returnType = StandardTypes.BOOLEAN, argumentTypes = {"K", "K"}) MethodHandle keyEqualsFunction,
+            @OperatorDependency(operator = HASH_CODE, returnType = StandardTypes.BIGINT, argumentTypes = {"K"}) MethodHandle keyHashcodeFunction,
+            @OperatorDependency(operator = EQUAL, returnType = StandardTypes.BOOLEAN, argumentTypes = {"V", "V"}) MethodHandle valueEqualsFunction,
+            @TypeParameter("K") Type keyType,
+            @TypeParameter("V") Type valueType,
+            @SqlType("map(K,V)") Block leftMapBlock,
+            @SqlType("map(K,V)") Block rightMapBlock)
     {
-        super(EQUAL, ImmutableList.of(comparableTypeParameter("K"), comparableTypeParameter("V")), StandardTypes.BOOLEAN, ImmutableList.of("map<K,V>", "map<K,V>"));
-    }
-
-    @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
-    {
-        Type keyType = types.get("K");
-        Type valueType = types.get("V");
-
-        Type type = typeManager.getParameterizedType(StandardTypes.MAP, ImmutableList.of(keyType.getTypeSignature(), valueType.getTypeSignature()), ImmutableList.of());
-        TypeSignature typeSignature = type.getTypeSignature();
-
-        MethodHandle keyEqualsFunction = functionRegistry.resolveOperator(EQUAL, ImmutableList.of(keyType, keyType)).getMethodHandle();
-        MethodHandle keyHashcodeFunction = functionRegistry.resolveOperator(HASH_CODE, ImmutableList.of(keyType)).getMethodHandle();
-        MethodHandle valueEqualsFunction = functionRegistry.resolveOperator(EQUAL, ImmutableList.of(valueType, valueType)).getMethodHandle();
-
-        MethodHandle methodHandle = methodHandle(MapEqualOperator.class, "equals", MethodHandle.class, MethodHandle.class, MethodHandle.class, Type.class, Type.class, Slice.class, Slice.class);
-        MethodHandle method = methodHandle.bindTo(keyEqualsFunction).bindTo(keyHashcodeFunction).bindTo(valueEqualsFunction).bindTo(keyType).bindTo(valueType);
-        return operatorInfo(EQUAL, RETURN_TYPE, ImmutableList.of(typeSignature, typeSignature), method, true, ImmutableList.of(false, false));
-    }
-
-    public static Boolean equals(MethodHandle keyEqualsFunction, MethodHandle keyHashcodeFunction, MethodHandle valueEqualsFunction, Type keyType, Type valueType, Slice left, Slice right)
-    {
-        Block leftMapBlock = readStructuralBlock(left);
-        Block rightMapBlock = readStructuralBlock(right);
-
         Map<KeyWrapper, Integer> wrappedLeftMap = new LinkedHashMap<>();
         for (int position = 0; position < leftMapBlock.getPositionCount(); position += 2) {
-            wrappedLeftMap.put(new KeyWrapper(castValue(keyType, leftMapBlock, position), keyEqualsFunction, keyHashcodeFunction), position + 1);
+            wrappedLeftMap.put(new KeyWrapper(readNativeValue(keyType, leftMapBlock, position), keyEqualsFunction, keyHashcodeFunction), position + 1);
         }
 
         Map<KeyWrapper, Integer> wrappedRightMap = new LinkedHashMap<>();
         for (int position = 0; position < rightMapBlock.getPositionCount(); position += 2) {
-            wrappedRightMap.put(new KeyWrapper(castValue(keyType, rightMapBlock, position), keyEqualsFunction, keyHashcodeFunction), position + 1);
+            wrappedRightMap.put(new KeyWrapper(readNativeValue(keyType, rightMapBlock, position), keyEqualsFunction, keyHashcodeFunction), position + 1);
         }
 
         if (wrappedLeftMap.size() != wrappedRightMap.size()) {
@@ -94,12 +70,12 @@ public class MapEqualOperator
                 return false;
             }
 
-            Object leftValue = castValue(valueType, leftMapBlock, leftValuePosition);
+            Object leftValue = readNativeValue(valueType, leftMapBlock, leftValuePosition);
             if (leftValue == null) {
                 return null;
             }
 
-            Object rightValue = castValue(valueType, rightMapBlock, entry.getValue());
+            Object rightValue = readNativeValue(valueType, rightMapBlock, entry.getValue());
             if (rightValue == null) {
                 return null;
             }

@@ -31,10 +31,31 @@ public class TestCassandraDistributed
     }
 
     @Override
+    public void testGroupingSetMixedExpressionAndColumn()
+            throws Exception
+    {
+        // Cassandra does not support DATE
+    }
+
+    @Override
+    public void testGroupingSetMixedExpressionAndOrdinal()
+            throws Exception
+    {
+        // Cassandra does not support DATE
+    }
+
+    @Override
     public void testRenameTable()
             throws Exception
     {
         // Cassandra does not support renaming tables
+    }
+
+    @Override
+    public void testAddColumn()
+            throws Exception
+    {
+        // Cassandra does not support adding columns
     }
 
     @Override
@@ -46,6 +67,20 @@ public class TestCassandraDistributed
 
     @Override
     public void testView()
+            throws Exception
+    {
+        // Cassandra connector currently does not support views
+    }
+
+    @Override
+    public void testCompatibleTypeChangeForView()
+            throws Exception
+    {
+        // Cassandra connector currently does not support views
+    }
+
+    @Override
+    public void testCompatibleTypeChangeForView2()
             throws Exception
     {
         // Cassandra connector currently does not support views
@@ -74,13 +109,6 @@ public class TestCassandraDistributed
 
     @Override
     public void testDelete()
-            throws Exception
-    {
-        // Cassandra connector currently does not support delete
-    }
-
-    @Override
-    public void testDeleteSemiJoin()
             throws Exception
     {
         // Cassandra connector currently does not support delete

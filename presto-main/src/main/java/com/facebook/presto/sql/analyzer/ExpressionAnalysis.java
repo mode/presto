@@ -16,26 +16,37 @@ package com.facebook.presto.sql.analyzer;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.InPredicate;
+import com.facebook.presto.sql.tree.SubqueryExpression;
+import com.google.common.collect.ImmutableSet;
 
 import java.util.IdentityHashMap;
 import java.util.Set;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class ExpressionAnalysis
 {
     private final IdentityHashMap<Expression, Type> expressionTypes;
     private final IdentityHashMap<Expression, Type> expressionCoercions;
+    private final Set<Expression> typeOnlyCoercions;
     private final Set<InPredicate> subqueryInPredicates;
+    private final Set<Expression> columnReferences;
+    private final Set<SubqueryExpression> scalarSubqueries;
 
     public ExpressionAnalysis(
             IdentityHashMap<Expression, Type> expressionTypes,
             IdentityHashMap<Expression, Type> expressionCoercions,
-            Set<InPredicate> subqueryInPredicates)
+            Set<InPredicate> subqueryInPredicates,
+            Set<SubqueryExpression> scalarSubqueries,
+            Set<Expression> columnReferences,
+            Set<Expression> typeOnlyCoercions)
     {
-        this.expressionTypes = checkNotNull(expressionTypes, "expressionTypes is null");
-        this.expressionCoercions = checkNotNull(expressionCoercions, "expressionCoercions is null");
-        this.subqueryInPredicates = checkNotNull(subqueryInPredicates, "subqueryInPredicates is null");
+        this.expressionTypes = requireNonNull(expressionTypes, "expressionTypes is null");
+        this.expressionCoercions = requireNonNull(expressionCoercions, "expressionCoercions is null");
+        this.typeOnlyCoercions = requireNonNull(typeOnlyCoercions, "typeOnlyCoercions is null");
+        this.subqueryInPredicates = requireNonNull(subqueryInPredicates, "subqueryInPredicates is null");
+        this.scalarSubqueries = requireNonNull(scalarSubqueries, "subqueryInPredicates is null");
+        this.columnReferences = ImmutableSet.copyOf(requireNonNull(columnReferences, "columnReferences is null"));
     }
 
     public Type getType(Expression expression)
@@ -53,8 +64,23 @@ public class ExpressionAnalysis
         return expressionCoercions.get(expression);
     }
 
+    public boolean isTypeOnlyCoercion(Expression expression)
+    {
+        return typeOnlyCoercions.contains(expression);
+    }
+
     public Set<InPredicate> getSubqueryInPredicates()
     {
         return subqueryInPredicates;
+    }
+
+    public Set<SubqueryExpression> getScalarSubqueries()
+    {
+        return scalarSubqueries;
+    }
+
+    public Set<Expression> getColumnReferences()
+    {
+        return columnReferences;
     }
 }

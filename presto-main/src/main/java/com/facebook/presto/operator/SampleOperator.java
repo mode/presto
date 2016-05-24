@@ -16,6 +16,7 @@ package com.facebook.presto.operator;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.google.common.collect.ImmutableList;
 import org.apache.commons.math3.random.RandomDataGenerator;
 
@@ -23,8 +24,8 @@ import java.util.List;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 public class SampleOperator
         implements Operator
@@ -33,19 +34,21 @@ public class SampleOperator
             implements OperatorFactory
     {
         private final int operatorId;
+        private final PlanNodeId planNodeId;
         private final double sampleRatio;
         private final boolean rescaled;
 
         private final List<Type> types;
         private boolean closed;
 
-        public SampleOperatorFactory(int operatorId, double sampleRatio, boolean rescaled, List<Type> sourceTypes)
+        public SampleOperatorFactory(int operatorId, PlanNodeId planNodeId, double sampleRatio, boolean rescaled, List<Type> sourceTypes)
         {
             this.operatorId = operatorId;
+            this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
             this.sampleRatio = sampleRatio;
             this.rescaled = rescaled;
             this.types = ImmutableList.<Type>builder()
-                    .addAll(checkNotNull(sourceTypes, "sourceTypes is null"))
+                    .addAll(requireNonNull(sourceTypes, "sourceTypes is null"))
                     .add(BIGINT)
                     .build();
         }
@@ -60,7 +63,7 @@ public class SampleOperator
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, SampleOperator.class.getSimpleName());
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, SampleOperator.class.getSimpleName());
             return new SampleOperator(operatorContext, sampleRatio, rescaled, types);
         }
 
@@ -68,6 +71,12 @@ public class SampleOperator
         public void close()
         {
             closed = true;
+        }
+
+        @Override
+        public OperatorFactory duplicate()
+        {
+            return new SampleOperatorFactory(operatorId, planNodeId, sampleRatio, rescaled, types.subList(0, types.size() - 1));
         }
     }
 
@@ -88,7 +97,7 @@ public class SampleOperator
         //Note: Poissonized Samples can be larger than the original dataset if desired
         checkArgument(sampleRatio > 0, "sample ratio must be strictly positive");
 
-        this.operatorContext = checkNotNull(operatorContext, "operatorContext is null");
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.types = ImmutableList.copyOf(types);
         this.pageBuilder = new PageBuilder(types);
         this.sampleWeightChannel = types.size() - 1;
@@ -130,7 +139,7 @@ public class SampleOperator
     public void addInput(Page page)
     {
         checkState(!finishing, "Operator is already finishing");
-        checkNotNull(page, "page is null");
+        requireNonNull(page, "page is null");
         checkState(!pageBuilder.isFull(), "Page buffer is full");
         checkState(this.page == null, "previous page has not been completely processed");
 

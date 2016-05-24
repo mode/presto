@@ -18,13 +18,16 @@ import com.facebook.presto.sql.tree.ArithmeticBinaryExpression;
 import com.facebook.presto.sql.tree.ArithmeticUnaryExpression;
 import com.facebook.presto.sql.tree.ArrayConstructor;
 import com.facebook.presto.sql.tree.AstVisitor;
+import com.facebook.presto.sql.tree.AtTimeZone;
 import com.facebook.presto.sql.tree.BetweenPredicate;
 import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
 import com.facebook.presto.sql.tree.CurrentTime;
+import com.facebook.presto.sql.tree.DereferenceExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.Extract;
+import com.facebook.presto.sql.tree.FieldReference;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.IfExpression;
 import com.facebook.presto.sql.tree.InListExpression;
@@ -45,81 +48,81 @@ import com.facebook.presto.sql.tree.SimpleCaseExpression;
 import com.facebook.presto.sql.tree.SortItem;
 import com.facebook.presto.sql.tree.SubqueryExpression;
 import com.facebook.presto.sql.tree.SubscriptExpression;
+import com.facebook.presto.sql.tree.TryExpression;
 import com.facebook.presto.sql.tree.WhenClause;
 import com.facebook.presto.sql.tree.Window;
 import com.facebook.presto.sql.tree.WindowFrame;
-import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 
 import javax.annotation.Nullable;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.MUST_BE_AGGREGATE_OR_GROUP_BY;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.NESTED_AGGREGATION;
 import static com.facebook.presto.sql.analyzer.SemanticErrorCode.NESTED_WINDOW;
-import static com.facebook.presto.sql.analyzer.SemanticErrorCode.NOT_SUPPORTED;
-import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
-import static com.google.common.base.Predicates.equalTo;
-import static com.google.common.base.Predicates.instanceOf;
+import static com.facebook.presto.util.Types.checkType;
+import static com.google.common.base.Preconditions.checkState;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Checks whether an expression is constant with respect to the group
  */
-public class AggregationAnalyzer
+class AggregationAnalyzer
 {
     // fields and expressions in the group by clause
     private final List<Integer> fieldIndexes;
     private final List<Expression> expressions;
 
     private final Metadata metadata;
+    private final Set<Expression> columnReferences;
 
-    private final TupleDescriptor tupleDescriptor;
+    private final RelationType tupleDescriptor;
 
-    public AggregationAnalyzer(List<FieldOrExpression> groupByExpressions, Metadata metadata, TupleDescriptor tupleDescriptor)
+    public AggregationAnalyzer(List<Expression> groupByExpressions, Metadata metadata, RelationType tupleDescriptor, Set<Expression> columnReferences)
     {
-        Preconditions.checkNotNull(groupByExpressions, "groupByExpressions is null");
-        Preconditions.checkNotNull(metadata, "metadata is null");
-        Preconditions.checkNotNull(tupleDescriptor, "tupleDescriptor is null");
+        requireNonNull(groupByExpressions, "groupByExpressions is null");
+        requireNonNull(metadata, "metadata is null");
+        requireNonNull(tupleDescriptor, "tupleDescriptor is null");
+        requireNonNull(columnReferences, "columnReferences is null");
 
         this.tupleDescriptor = tupleDescriptor;
         this.metadata = metadata;
-
-        this.expressions = groupByExpressions.stream()
-                .filter(FieldOrExpression::isExpression)
-                .map(FieldOrExpression::getExpression)
-                .collect(toImmutableList());
-
+        this.columnReferences = ImmutableSet.copyOf(columnReferences);
+        this.expressions = ImmutableList.copyOf(groupByExpressions);
         ImmutableList.Builder<Integer> fieldIndexes = ImmutableList.builder();
 
         fieldIndexes.addAll(groupByExpressions.stream()
-                .filter(FieldOrExpression::isFieldReference)
-                .map(FieldOrExpression::getFieldIndex)
+                .filter(FieldReference.class::isInstance)
+                .map(FieldReference.class::cast)
+                .map(FieldReference::getFieldIndex)
                 .iterator());
 
         // For a query like "SELECT * FROM T GROUP BY a", groupByExpressions will contain "a",
         // and the '*' will be expanded to Field references. Therefore we translate all simple name expressions
         // in the group by clause to fields they reference so that the expansion from '*' can be matched against them
-        for (Expression expression : Iterables.filter(expressions, instanceOf(QualifiedNameReference.class))) {
-            QualifiedName name = ((QualifiedNameReference) expression).getName();
+        for (Expression expression : Iterables.filter(expressions, columnReferences::contains)) {
+            QualifiedName name;
+            if (expression instanceof QualifiedNameReference) {
+                name = ((QualifiedNameReference) expression).getName();
+            }
+            else {
+                name = DereferenceExpression.getQualifiedName(checkType(expression, DereferenceExpression.class, "expression"));
+            }
 
             List<Field> fields = tupleDescriptor.resolveFields(name);
-            Preconditions.checkState(fields.size() <= 1, "Found more than one field for name '%s': %s", name, fields);
+            checkState(fields.size() <= 1, "Found more than one field for name '%s': %s", name, fields);
 
             if (fields.size() == 1) {
                 Field field = Iterables.getOnlyElement(fields);
                 fieldIndexes.add(tupleDescriptor.indexOf(field));
             }
         }
-
         this.fieldIndexes = fieldIndexes.build();
-    }
-
-    public boolean analyze(int fieldIndex)
-    {
-        return Iterables.any(fieldIndexes, equalTo(fieldIndex));
     }
 
     public void analyze(Expression expression)
@@ -140,9 +143,15 @@ public class AggregationAnalyzer
         }
 
         @Override
+        protected Boolean visitAtTimeZone(AtTimeZone node, Void context)
+        {
+            return process(node.getValue(), context);
+        }
+
+        @Override
         protected Boolean visitSubqueryExpression(SubqueryExpression node, Void context)
         {
-            throw new SemanticException(NOT_SUPPORTED, node, "Scalar subqueries not yet supported");
+            return true;
         }
 
         @Override
@@ -333,14 +342,34 @@ public class AggregationAnalyzer
         @Override
         protected Boolean visitQualifiedNameReference(QualifiedNameReference node, Void context)
         {
-            QualifiedName name = node.getName();
+            return isField(node.getName());
+        }
 
-            List<Field> fields = tupleDescriptor.resolveFields(name);
-            Preconditions.checkState(!fields.isEmpty(), "No fields for name '%s'", name);
-            Preconditions.checkState(fields.size() <= 1, "Found more than one field for name '%s': %s", name, fields);
+        @Override
+        protected Boolean visitDereferenceExpression(DereferenceExpression node, Void context)
+        {
+            if (columnReferences.contains(node)) {
+                return isField(DereferenceExpression.getQualifiedName(node));
+            }
+
+            // Allow SELECT col1.f1 FROM table1 GROUP BY col1
+            return process(node.getBase(), context);
+        }
+
+        private Boolean isField(QualifiedName qualifiedName)
+        {
+            List<Field> fields = tupleDescriptor.resolveFields(qualifiedName);
+            checkState(!fields.isEmpty(), "No fields for name '%s'", qualifiedName);
+            checkState(fields.size() <= 1, "Found more than one field for name '%s': %s", qualifiedName, fields);
 
             Field field = Iterables.getOnlyElement(fields);
             return fieldIndexes.contains(tupleDescriptor.indexOf(field));
+        }
+
+        @Override
+        protected Boolean visitFieldReference(FieldReference node, Void context)
+        {
+            return fieldIndexes.contains(node.getFieldIndex());
         }
 
         @Override
@@ -405,6 +434,12 @@ public class AggregationAnalyzer
             }
 
             return !node.getDefaultValue().isPresent() || process(node.getDefaultValue().get(), context);
+        }
+
+        @Override
+        protected Boolean visitTryExpression(TryExpression node, Void context)
+        {
+            return process(node.getInnerExpression(), context);
         }
 
         @Override

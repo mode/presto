@@ -14,19 +14,20 @@
 package com.facebook.presto.sql.planner.optimizations;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
-import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.MarkDistinctNode;
-import com.facebook.presto.sql.planner.plan.PlanRewriter;
+import com.facebook.presto.sql.planner.plan.PlanNode;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
+import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
 import com.facebook.presto.sql.tree.NullLiteral;
 import com.facebook.presto.sql.tree.QualifiedNameReference;
-import com.facebook.presto.spi.type.Type;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
@@ -34,11 +35,11 @@ import com.google.common.collect.Maps;
 
 import java.util.Collections;
 import java.util.Map;
-import java.util.Set;
 import java.util.Optional;
+import java.util.Set;
 
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.SINGLE;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 /**
  * Converts Single Distinct Aggregation into GroupBy
@@ -53,22 +54,22 @@ import static com.google.common.base.Preconditions.checkNotNull;
  * Remove Distincts in the original AggregationNode
  */
 public class SingleDistinctOptimizer
-        extends PlanOptimizer
+        implements PlanOptimizer
 {
     @Override
     public PlanNode optimize(PlanNode plan, Session session, Map<Symbol, Type> types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
     {
-        return PlanRewriter.rewriteWith(new Optimizer(idAllocator), plan, Optional.empty());
+        return SimplePlanRewriter.rewriteWith(new Optimizer(idAllocator), plan, Optional.empty());
     }
 
     private static class Optimizer
-            extends PlanRewriter<Optional<Symbol>>
+            extends SimplePlanRewriter<Optional<Symbol>>
     {
         private final PlanNodeIdAllocator idAllocator;
 
         private Optimizer(PlanNodeIdAllocator idAllocator)
         {
-            this.idAllocator = checkNotNull(idAllocator, "idAllocator is null");
+            this.idAllocator = requireNonNull(idAllocator, "idAllocator is null");
         }
 
         @Override
@@ -91,6 +92,7 @@ public class SingleDistinctOptimizer
                                         aggregations,
                                         node.getFunctions(),
                                         Collections.emptyMap(),
+                                        node.getGroupingSets(),
                                         node.getStep(),
                                         node.getSampleWeight(),
                                         node.getConfidence(),
@@ -109,6 +111,7 @@ public class SingleDistinctOptimizer
                                                                         Collections.emptyMap(),
                                                                         Collections.emptyMap(),
                                                                         Collections.emptyMap(),
+                                                                        ImmutableList.of(node.getDistinctSymbols()),
                                                                         SINGLE,
                                                                         Optional.empty(),
                                                                         1.0,

@@ -89,7 +89,9 @@ public class SpnegoFilter
                     if (LOG.isDebugEnabled()) {
                         options.put("debug", "true");
                     }
-
+                    if (config.getKeytab() != null) {
+                        options.put("keyTab", config.getKeytab().getAbsolutePath());
+                    }
                     options.put("isInitiator", "false");
                     options.put("useKeyTab", "true");
                     options.put("principal", servicePrincipal);
@@ -188,10 +190,11 @@ public class SpnegoFilter
                         Optional.ofNullable(outputToken),
                         new KerberosPrincipal(context.getSrcName().toString())));
             }
+            LOG.debug("Failed to establish GSS context for token %s", token);
         }
         catch (GSSException e) {
             // ignore and fail the authentication
-            LOG.debug(e, "auth failed");
+            LOG.debug(e, "Authentication failed for token %s", token);
         }
         finally {
             try {

@@ -21,7 +21,6 @@ import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static org.testng.Assert.assertEquals;
 
@@ -32,7 +31,7 @@ public class TestHiddenColumns
     public TestHiddenColumns()
     {
         runner = new LocalQueryRunner(TEST_SESSION);
-        runner.createCatalog(TEST_SESSION.getCatalog(), new TpchConnectorFactory(runner.getNodeManager(), 1), ImmutableMap.<String, String>of());
+        runner.createCatalog(TEST_SESSION.getCatalog().get(), new TpchConnectorFactory(runner.getNodeManager(), 1), ImmutableMap.<String, String>of());
     }
 
     @AfterClass
@@ -47,10 +46,10 @@ public class TestHiddenColumns
     public void testDescribeTable()
             throws Exception
     {
-        MaterializedResult expected = MaterializedResult.resultBuilder(TEST_SESSION, VARCHAR, VARCHAR, BOOLEAN, BOOLEAN, VARCHAR)
-                .row("regionkey", "bigint", true, false, "")
-                .row("name", "varchar", true, false, "")
-                .row("comment", "varchar", true, false, "")
+        MaterializedResult expected = MaterializedResult.resultBuilder(TEST_SESSION, VARCHAR, VARCHAR, VARCHAR)
+                .row("regionkey", "bigint", "")
+                .row("name", "varchar", "")
+                .row("comment", "varchar", "")
                 .build();
         assertEquals(runner.execute("DESC REGION"), expected);
     }

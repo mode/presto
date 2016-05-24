@@ -59,15 +59,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static com.facebook.presto.jdbc.ColumnInfo.setTypeInfo;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Throwables.propagate;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Iterators.concat;
 import static com.google.common.collect.Iterators.transform;
 import static java.lang.String.format;
+import static java.math.BigDecimal.ROUND_HALF_UP;
 import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 
@@ -129,19 +130,21 @@ public class PrestoResultSet
     private final AtomicReference<List<Object>> row = new AtomicReference<>();
     private final AtomicBoolean wasNull = new AtomicBoolean();
 
-    PrestoResultSet(StatementClient client)
+    PrestoResultSet(StatementClient client, Consumer<QueryStats> progressCallback)
             throws SQLException
     {
-        this.client = checkNotNull(client, "client is null");
+        this.client = requireNonNull(client, "client is null");
+        requireNonNull(progressCallback, "progressCallback is null");
+
         this.sessionTimeZone = DateTimeZone.forID(client.getTimeZoneId());
         this.queryId = client.current().getId();
 
-        List<Column> columns = getColumns(client);
+        List<Column> columns = getColumns(client, progressCallback);
         this.fieldMap = getFieldMap(columns);
         this.columnInfoList = getColumnInfo(columns);
         this.resultSetMetaData = new PrestoResultSetMetaData(columnInfoList);
 
-        this.results = flatten(new ResultsPageIterator(client));
+        this.results = flatten(new ResultsPageIterator(client, progressCallback));
     }
 
     public String getQueryId()
@@ -151,7 +154,7 @@ public class PrestoResultSet
 
     public QueryStats getStats()
     {
-        return QueryStats.create(client.getStats());
+        return QueryStats.create(queryId, client.getStats());
     }
 
     @Override
@@ -251,7 +254,11 @@ public class PrestoResultSet
     public BigDecimal getBigDecimal(int columnIndex, int scale)
             throws SQLException
     {
-        throw new SQLFeatureNotSupportedException("getBigDecimal");
+        BigDecimal bigDecimal = getBigDecimal(columnIndex);
+        if (bigDecimal != null) {
+            bigDecimal = bigDecimal.setScale(scale, ROUND_HALF_UP);
+        }
+        return bigDecimal;
     }
 
     @Override
@@ -441,7 +448,7 @@ public class PrestoResultSet
     public BigDecimal getBigDecimal(String columnLabel, int scale)
             throws SQLException
     {
-        throw new SQLFeatureNotSupportedException("getBigDecimal");
+        return getBigDecimal(columnIndex(columnLabel), scale);
     }
 
     @Override
@@ -536,6 +543,8 @@ public class PrestoResultSet
                 return getTimestamp(columnIndex);
             case Types.ARRAY:
                 return getArray(columnIndex);
+            case Types.DECIMAL:
+                return getBigDecimal(columnIndex);
             case Types.JAVA_OBJECT:
                 if (columnInfo.getColumnTypeName().equalsIgnoreCase("interval year to month")) {
                     return getIntervalYearMonth(columnIndex);
@@ -611,14 +620,19 @@ public class PrestoResultSet
     public BigDecimal getBigDecimal(int columnIndex)
             throws SQLException
     {
-        throw new NotImplementedException("ResultSet", "getBigDecimal");
+        Object value = column(columnIndex);
+        if (value == null) {
+            return null;
+        }
+
+        return new BigDecimal(String.valueOf(value));
     }
 
     @Override
     public BigDecimal getBigDecimal(String columnLabel)
             throws SQLException
     {
-        throw new NotImplementedException("ResultSet", "getBigDecimal");
+        return getBigDecimal(columnIndex(columnLabel));
     }
 
     @Override
@@ -1739,11 +1753,13 @@ public class PrestoResultSet
         throw new SQLException("Value is not a number: " + value.getClass().getCanonicalName());
     }
 
-    private static List<Column> getColumns(StatementClient client)
+    private static List<Column> getColumns(StatementClient client, Consumer<QueryStats> progressCallback)
             throws SQLException
     {
         while (client.isValid()) {
-            List<Column> columns = client.current().getColumns();
+            QueryResults results = client.current();
+            progressCallback.accept(QueryStats.create(results.getId(), results.getStats()));
+            List<Column> columns = results.getColumns();
             if (columns != null) {
                 return columns;
             }
@@ -1766,10 +1782,12 @@ public class PrestoResultSet
             extends AbstractIterator<Iterable<List<Object>>>
     {
         private final StatementClient client;
+        private final Consumer<QueryStats> progressCallback;
 
-        private ResultsPageIterator(StatementClient client)
+        private ResultsPageIterator(StatementClient client, Consumer<QueryStats> progressCallback)
         {
-            this.client = checkNotNull(client, "client is null");
+            this.client = requireNonNull(client, "client is null");
+            this.progressCallback = requireNonNull(progressCallback, "progressCallback is null");
         }
 
         @Override
@@ -1781,7 +1799,9 @@ public class PrestoResultSet
                     throw propagate(new SQLException("ResultSet thread was interrupted"));
                 }
 
-                Iterable<List<Object>> data = client.current().getData();
+                QueryResults results = client.current();
+                progressCallback.accept(QueryStats.create(results.getId(), results.getStats()));
+                Iterable<List<Object>> data = results.getData();
                 client.advance();
                 if (data != null) {
                     return data;
@@ -1796,7 +1816,7 @@ public class PrestoResultSet
         }
     }
 
-    private static SQLException resultsException(QueryResults results)
+    static SQLException resultsException(QueryResults results)
     {
         QueryError error = requireNonNull(results.getError());
         String message = format("Query failed (#%s): %s", results.getId(), error.getMessage());

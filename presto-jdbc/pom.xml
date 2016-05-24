@@ -5,7 +5,7 @@
     <parent>
         <groupId>com.facebook.presto</groupId>
         <artifactId>presto-root</artifactId>
-        <version>0.111-SNAPSHOT</version>
+        <version>0.148-SNAPSHOT</version>
     </parent>
 
     <artifactId>presto-jdbc</artifactId>
@@ -122,6 +122,12 @@
         </dependency>
 
         <dependency>
+            <groupId>com.facebook.presto</groupId>
+            <artifactId>presto-blackhole</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
             <groupId>org.testng</groupId>
             <artifactId>testng</artifactId>
             <scope>test</scope>
@@ -207,9 +213,9 @@
                                     </excludes>
                                 </filter>
                                 <filter>
-                                    <artifact>com.fasterxml.jackson.core:*</artifact>
+                                    <artifact>com.fasterxml.jackson.*:*</artifact>
                                     <excludes>
-                                        <exclude>META-INF/services/**</exclude>
+                                        <exclude>META-INF/**</exclude>
                                     </excludes>
                                 </filter>
                                 <filter>
@@ -240,6 +246,12 @@
                                     <artifact>org.eclipse.jetty:*</artifact>
                                     <excludes>
                                         <exclude>about.html</exclude>
+                                    </excludes>
+                                </filter>
+                                <filter>
+                                    <artifact>net.sf.opencsv:opencsv</artifact>
+                                    <excludes>
+                                        <exclude>**</exclude>
                                     </excludes>
                                 </filter>
                             </filters>

@@ -22,7 +22,6 @@ import java.util.List;
 public interface RecordSink
 {
     /**
-     *
      * @param sampleWeight connectors that don't support sampling can safely ignore this parameter, as it will always be 1
      */
     void beginRecord(long sampleWeight);
@@ -38,6 +37,8 @@ public interface RecordSink
     void appendDouble(double value);
 
     void appendString(byte[] value);
+
+    void appendObject(Object value);
 
     Collection<Slice> commit();
 

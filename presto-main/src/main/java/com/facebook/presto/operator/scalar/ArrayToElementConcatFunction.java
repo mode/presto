@@ -13,34 +13,44 @@
  */
 package com.facebook.presto.operator.scalar;
 
-import com.facebook.presto.metadata.FunctionInfo;
+import com.facebook.presto.metadata.BoundVariables;
+import com.facebook.presto.metadata.FunctionKind;
 import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.ParametricScalar;
 import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.SqlScalarFunction;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
-import com.facebook.presto.spi.type.TypeSignature;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
 
 import java.lang.invoke.MethodHandle;
-import java.util.Map;
 
-import static com.facebook.presto.metadata.Signature.typeParameter;
-import static com.facebook.presto.type.TypeUtils.parameterizedTypeName;
+import static com.facebook.presto.metadata.Signature.typeVariable;
+import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Reflection.methodHandle;
 
 public class ArrayToElementConcatFunction
-        extends ParametricScalar
+        extends SqlScalarFunction
 {
     public static final ArrayToElementConcatFunction ARRAY_TO_ELEMENT_CONCAT_FUNCTION = new ArrayToElementConcatFunction();
     private static final String FUNCTION_NAME = "concat";
-    private static final Signature SIGNATURE = new Signature(FUNCTION_NAME, ImmutableList.of(typeParameter("E")), "array<E>", ImmutableList.of("array<E>", "E"), false, false);
 
-    @Override
-    public Signature getSignature()
+    private static final MethodHandle METHOD_HANDLE_BOOLEAN = methodHandle(ArrayConcatUtils.class, "appendElement", Type.class, Block.class, boolean.class);
+    private static final MethodHandle METHOD_HANDLE_LONG = methodHandle(ArrayConcatUtils.class, "appendElement", Type.class, Block.class, long.class);
+    private static final MethodHandle METHOD_HANDLE_DOUBLE = methodHandle(ArrayConcatUtils.class, "appendElement", Type.class, Block.class, double.class);
+    private static final MethodHandle METHOD_HANDLE_SLICE = methodHandle(ArrayConcatUtils.class, "appendElement", Type.class, Block.class, Slice.class);
+    private static final MethodHandle METHOD_HANDLE_OBJECT = methodHandle(ArrayConcatUtils.class, "appendElement", Type.class, Block.class, Object.class);
+
+    public ArrayToElementConcatFunction()
     {
-        return SIGNATURE;
+        super(new Signature(FUNCTION_NAME,
+                FunctionKind.SCALAR,
+                ImmutableList.of(typeVariable("E")),
+                ImmutableList.of(),
+                parseTypeSignature("array(E)"),
+                ImmutableList.of(parseTypeSignature("array(E)"), parseTypeSignature("E")),
+                false));
     }
 
     @Override
@@ -62,15 +72,27 @@ public class ArrayToElementConcatFunction
     }
 
     @Override
-    public FunctionInfo specialize(Map<String, Type> types, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
     {
-        Type type = types.get("E");
-        MethodHandle methodHandle = methodHandle(ArrayConcatUtils.class, "appendElement", Type.class, Slice.class, type.getJavaType());
+        Type type = boundVariables.getTypeVariable("E");
+        MethodHandle methodHandle;
+        if (type.getJavaType() == boolean.class) {
+            methodHandle = METHOD_HANDLE_BOOLEAN;
+        }
+        else if (type.getJavaType() == long.class) {
+            methodHandle = METHOD_HANDLE_LONG;
+        }
+        else if (type.getJavaType() == double.class) {
+            methodHandle = METHOD_HANDLE_DOUBLE;
+        }
+        else if (type.getJavaType() == Slice.class) {
+            methodHandle = METHOD_HANDLE_SLICE;
+        }
+        else {
+            methodHandle = METHOD_HANDLE_OBJECT;
+        }
         methodHandle = methodHandle.bindTo(type);
 
-        TypeSignature typeSignature = type.getTypeSignature();
-        TypeSignature returnType = parameterizedTypeName("array", typeSignature);
-        Signature signature = new Signature(FUNCTION_NAME, returnType, returnType, typeSignature);
-        return new FunctionInfo(signature, getDescription(), isHidden(), methodHandle, isDeterministic(), false, ImmutableList.of(false, false));
+        return new ScalarFunctionImplementation(false, ImmutableList.of(false, false), methodHandle, isDeterministic());
     }
 }

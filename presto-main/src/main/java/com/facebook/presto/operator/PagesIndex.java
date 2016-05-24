@@ -35,13 +35,12 @@ import java.util.Optional;
 import static com.facebook.presto.operator.SyntheticAddress.decodePosition;
 import static com.facebook.presto.operator.SyntheticAddress.decodeSliceIndex;
 import static com.facebook.presto.operator.SyntheticAddress.encodeSyntheticAddress;
-import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.sql.gen.JoinCompiler.LookupSourceFactory;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkNotNull;
 import static io.airlift.slice.SizeOf.sizeOf;
 import static io.airlift.units.DataSize.Unit.BYTE;
+import static java.util.Objects.requireNonNull;
 
 /**
  * PagesIndex a low-level data structure which contains the address of every value position of every channel.
@@ -74,7 +73,7 @@ public class PagesIndex
 
     public PagesIndex(List<Type> types, int expectedPositions)
     {
-        this.types = ImmutableList.copyOf(checkNotNull(types, "types is null"));
+        this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
         this.valueAddresses = new LongArrayList(expectedPositions);
 
         //noinspection rawtypes
@@ -135,38 +134,6 @@ public class PagesIndex
         for (int position = 0; position < page.getPositionCount(); position++) {
             long sliceAddress = encodeSyntheticAddress(pageIndex, position);
             valueAddresses.add(sliceAddress);
-        }
-
-        estimatedSize = calculateEstimatedSize();
-    }
-
-    /**
-     * Add positions in page with the specified partitionId.
-     * NOTE: this method does not track memory used in the page, since
-     * only part of the page will be used.
-     */
-    public void addPage(Page page, int partitionId, Block partitionIds)
-    {
-        // ignore empty pages
-        if (page.getPositionCount() == 0) {
-            return;
-        }
-
-        positionCount += page.getPositionCount();
-
-        int pageIndex = (channels.length > 0) ? channels[0].size() : 0;
-        for (int i = 0; i < channels.length; i++) {
-            Block block = page.getBlock(i);
-            channels[i].add(block);
-        }
-
-        for (int position = 0; position < page.getPositionCount(); position++) {
-            if (partitionId == BIGINT.getLong(partitionIds, position)) {
-                long sliceAddress = encodeSyntheticAddress(pageIndex, position);
-                valueAddresses.add(sliceAddress);
-
-                positionCount++;
-            }
         }
 
         estimatedSize = calculateEstimatedSize();
@@ -318,13 +285,13 @@ public class PagesIndex
         return partitionHashStrategy.positionEqualsPosition(leftPageIndex, leftPagePosition, rightPageIndex, rightPagePosition);
     }
 
-    public boolean positionEqualsRow(PagesHashStrategy pagesHashStrategy, int indexPosition, int rowPosition, Block... row)
+    public boolean positionEqualsRow(PagesHashStrategy pagesHashStrategy, int indexPosition, int rightPosition, Page rightPage)
     {
         long pageAddress = valueAddresses.getLong(indexPosition);
         int pageIndex = decodeSliceIndex(pageAddress);
         int pagePosition = decodePosition(pageAddress);
 
-        return pagesHashStrategy.positionEqualsRow(pageIndex, pagePosition, rowPosition, row);
+        return pagesHashStrategy.positionEqualsRow(pageIndex, pagePosition, rightPosition, rightPage);
     }
 
     private PagesIndexOrdering createPagesIndexComparator(List<Integer> sortChannels, List<SortOrder> sortOrders)

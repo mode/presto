@@ -68,6 +68,12 @@ public class RecordPageSource
     }
 
     @Override
+    public long getSystemMemoryUsage()
+    {
+        return cursor.getSystemMemoryUsage() + pageBuilder.getSizeInBytes();
+    }
+
+    @Override
     public void close()
     {
         closed = true;
@@ -118,7 +124,7 @@ public class RecordPageSource
                             type.writeSlice(output, slice, 0, slice.length());
                         }
                         else {
-                            throw new AssertionError("Unimplemented type: " + javaType.getName());
+                            type.writeObject(output, cursor.getObject(column));
                         }
                     }
                 }

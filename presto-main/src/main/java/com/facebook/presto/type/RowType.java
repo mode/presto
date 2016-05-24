@@ -16,44 +16,43 @@ package com.facebook.presto.type;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.StandardErrorCode;
+import com.facebook.presto.spi.block.ArrayBlockBuilder;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
-import com.facebook.presto.spi.type.AbstractVariableWidthType;
+import com.facebook.presto.spi.block.BlockBuilderStatus;
+import com.facebook.presto.spi.block.InterleavedBlockBuilder;
+import com.facebook.presto.spi.type.AbstractType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.google.common.base.Joiner;
-import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import io.airlift.slice.Slice;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
-import static com.facebook.presto.type.TypeUtils.readStructuralBlock;
+import static com.facebook.presto.spi.type.StandardTypes.ROW;
 import static com.facebook.presto.util.ImmutableCollectors.toImmutableList;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 /**
  * As defined in ISO/IEC FCD 9075-2 (SQL 2011), section 4.8
  */
 public class RowType
-        extends AbstractVariableWidthType
+        extends AbstractType
 {
     private final List<RowField> fields;
 
     public RowType(List<Type> fieldTypes, Optional<List<String>> fieldNames)
     {
         super(new TypeSignature(
-                        "row",
+                        ROW,
                         Lists.transform(fieldTypes, Type::getTypeSignature),
                         fieldNames.orElse(ImmutableList.of()).stream()
-                                .map(Object.class::cast)
                                 .collect(toImmutableList())),
-                Slice.class);
+                Block.class);
 
         ImmutableList.Builder<RowField> builder = ImmutableList.builder();
         for (int i = 0; i < fieldTypes.size(); i++) {
@@ -61,6 +60,24 @@ public class RowType
             builder.add(new RowField(fieldTypes.get(i), fieldNames.map((names) -> names.get(index))));
         }
         fields = builder.build();
+    }
+
+    @Override
+    public BlockBuilder createBlockBuilder(BlockBuilderStatus blockBuilderStatus, int expectedEntries, int expectedBytesPerEntry)
+    {
+        return new ArrayBlockBuilder(
+                new InterleavedBlockBuilder(getTypeParameters(), blockBuilderStatus, expectedEntries * getTypeParameters().size(), expectedBytesPerEntry),
+                blockBuilderStatus,
+                expectedEntries);
+    }
+
+    @Override
+    public BlockBuilder createBlockBuilder(BlockBuilderStatus blockBuilderStatus, int expectedEntries)
+    {
+        return new ArrayBlockBuilder(
+                new InterleavedBlockBuilder(getTypeParameters(), blockBuilderStatus, expectedEntries * getTypeParameters().size()),
+                blockBuilderStatus,
+                expectedEntries);
     }
 
     @Override
@@ -77,7 +94,7 @@ public class RowType
                 fieldDisplayNames.add(typeDisplayName);
             }
         }
-        return "row(" + Joiner.on(", ").join(fieldDisplayNames) + ")";
+        return ROW + "(" + Joiner.on(", ").join(fieldDisplayNames) + ")";
     }
 
     @Override
@@ -87,9 +104,8 @@ public class RowType
             return null;
         }
 
-        Slice slice = getSlice(block, position);
-        Block arrayBlock = readStructuralBlock(slice);
-        List<Object> values = Lists.newArrayListWithCapacity(arrayBlock.getPositionCount());
+        Block arrayBlock = getObject(block, position);
+        List<Object> values = new ArrayList<>(arrayBlock.getPositionCount());
 
         for (int i = 0; i < arrayBlock.getPositionCount(); i++) {
             values.add(fields.get(i).getType().getObjectValue(session, arrayBlock, i));
@@ -105,27 +121,21 @@ public class RowType
             blockBuilder.appendNull();
         }
         else {
-            block.writeBytesTo(position, 0, block.getLength(position), blockBuilder);
+            blockBuilder.writeObject(block.getObject(position, Block.class));
             blockBuilder.closeEntry();
         }
     }
 
     @Override
-    public Slice getSlice(Block block, int position)
+    public Block getObject(Block block, int position)
     {
-        return block.getSlice(position, 0, block.getLength(position));
+        return block.getObject(position, Block.class);
     }
 
     @Override
-    public void writeSlice(BlockBuilder blockBuilder, Slice value)
+    public void writeObject(BlockBuilder blockBuilder, Object value)
     {
-        writeSlice(blockBuilder, value, 0, value.length());
-    }
-
-    @Override
-    public void writeSlice(BlockBuilder blockBuilder, Slice value, int offset, int length)
-    {
-        blockBuilder.writeBytes(value, offset, length).closeEntry();
+        blockBuilder.writeObject(value).closeEntry();
     }
 
     @Override
@@ -148,8 +158,8 @@ public class RowType
 
         public RowField(Type type, Optional<String> name)
         {
-            this.type = checkNotNull(type, "type is null");
-            this.name = checkNotNull(name, "name is null");
+            this.type = requireNonNull(type, "type is null");
+            this.name = requireNonNull(name, "name is null");
         }
 
         public Type getType()
@@ -166,29 +176,20 @@ public class RowType
     @Override
     public boolean isComparable()
     {
-        return Iterables.all(fields, new Predicate<RowField>()
-        {
-            @Override
-            public boolean apply(RowField field)
-            {
-                return field.getType().isComparable();
-            }
-        });
+        return fields.stream().allMatch(field -> field.getType().isComparable());
     }
 
     @Override
     public boolean equalTo(Block leftBlock, int leftPosition, Block rightBlock, int rightPosition)
     {
-        Slice leftSlice = getSlice(leftBlock, leftPosition);
-        Slice rightSlice = getSlice(rightBlock, rightPosition);
-        Block leftArray = readStructuralBlock(leftSlice);
-        Block rightArray = readStructuralBlock(rightSlice);
+        Block leftRow = leftBlock.getObject(leftPosition, Block.class);
+        Block rightRow = rightBlock.getObject(rightPosition, Block.class);
 
-        for (int i = 0; i < leftArray.getPositionCount(); i++) {
-            checkElementNotNull(leftArray.isNull(i));
-            checkElementNotNull(rightArray.isNull(i));
+        for (int i = 0; i < leftRow.getPositionCount(); i++) {
+            checkElementNotNull(leftRow.isNull(i));
+            checkElementNotNull(rightRow.isNull(i));
             Type fieldType = fields.get(i).getType();
-            if (!fieldType.equalTo(leftArray, i, rightArray, i)) {
+            if (!fieldType.equalTo(leftRow, i, rightRow, i)) {
                 return false;
             }
         }
@@ -197,11 +198,10 @@ public class RowType
     }
 
     @Override
-    public int hash(Block block, int position)
+    public long hash(Block block, int position)
     {
-        Slice value = getSlice(block, position);
-        Block arrayBlock = readStructuralBlock(value);
-        int result = 1;
+        Block arrayBlock = block.getObject(position, Block.class);
+        long result = 1;
         for (int i = 0; i < arrayBlock.getPositionCount(); i++) {
             checkElementNotNull(arrayBlock.isNull(i));
             Type elementType = fields.get(i).getType();

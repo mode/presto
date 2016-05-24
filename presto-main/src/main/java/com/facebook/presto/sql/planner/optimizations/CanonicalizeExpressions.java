@@ -20,8 +20,8 @@ import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.SymbolAllocator;
 import com.facebook.presto.sql.planner.plan.FilterNode;
 import com.facebook.presto.sql.planner.plan.PlanNode;
-import com.facebook.presto.sql.planner.plan.PlanRewriter;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
+import com.facebook.presto.sql.planner.plan.SimplePlanRewriter;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.tree.BooleanLiteral;
 import com.facebook.presto.sql.tree.CurrentTime;
@@ -44,10 +44,10 @@ import com.google.common.collect.Maps;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.Objects.requireNonNull;
 
 public class CanonicalizeExpressions
-        extends PlanOptimizer
+        implements PlanOptimizer
 {
     public static Expression canonicalizeExpression(Expression expression)
     {
@@ -57,17 +57,17 @@ public class CanonicalizeExpressions
     @Override
     public PlanNode optimize(PlanNode plan, Session session, Map<Symbol, Type> types, SymbolAllocator symbolAllocator, PlanNodeIdAllocator idAllocator)
     {
-        checkNotNull(plan, "plan is null");
-        checkNotNull(session, "session is null");
-        checkNotNull(types, "types is null");
-        checkNotNull(symbolAllocator, "symbolAllocator is null");
-        checkNotNull(idAllocator, "idAllocator is null");
+        requireNonNull(plan, "plan is null");
+        requireNonNull(session, "session is null");
+        requireNonNull(types, "types is null");
+        requireNonNull(symbolAllocator, "symbolAllocator is null");
+        requireNonNull(idAllocator, "idAllocator is null");
 
-        return PlanRewriter.rewriteWith(new Rewriter(), plan);
+        return SimplePlanRewriter.rewriteWith(new Rewriter(), plan);
     }
 
     private static class Rewriter
-            extends PlanRewriter<Void>
+            extends SimplePlanRewriter<Void>
     {
         @Override
         public PlanNode visitProject(ProjectNode node, RewriteContext<Void> context)

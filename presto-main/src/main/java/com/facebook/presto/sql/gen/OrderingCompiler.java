@@ -13,19 +13,20 @@
  */
 package com.facebook.presto.sql.gen;
 
-import com.facebook.presto.byteCode.Block;
-import com.facebook.presto.byteCode.ClassDefinition;
-import com.facebook.presto.byteCode.Scope;
-import com.facebook.presto.byteCode.MethodDefinition;
-import com.facebook.presto.byteCode.Parameter;
-import com.facebook.presto.byteCode.Variable;
-import com.facebook.presto.byteCode.expression.ByteCodeExpression;
-import com.facebook.presto.byteCode.instruction.LabelNode;
+import com.facebook.presto.bytecode.BytecodeBlock;
+import com.facebook.presto.bytecode.ClassDefinition;
+import com.facebook.presto.bytecode.MethodDefinition;
+import com.facebook.presto.bytecode.Parameter;
+import com.facebook.presto.bytecode.Scope;
+import com.facebook.presto.bytecode.Variable;
+import com.facebook.presto.bytecode.expression.BytecodeExpression;
+import com.facebook.presto.bytecode.instruction.LabelNode;
 import com.facebook.presto.operator.PagesIndex;
 import com.facebook.presto.operator.PagesIndexComparator;
 import com.facebook.presto.operator.PagesIndexOrdering;
 import com.facebook.presto.operator.SimplePagesIndexComparator;
 import com.facebook.presto.operator.SyntheticAddress;
+import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.spi.type.Type;
 import com.google.common.annotations.VisibleForTesting;
@@ -44,18 +45,18 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 
-import static com.facebook.presto.byteCode.Access.FINAL;
-import static com.facebook.presto.byteCode.Access.PUBLIC;
-import static com.facebook.presto.byteCode.Access.a;
-import static com.facebook.presto.byteCode.Parameter.arg;
-import static com.facebook.presto.byteCode.ParameterizedType.type;
-import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.constantInt;
-import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.getStatic;
-import static com.facebook.presto.byteCode.expression.ByteCodeExpressions.invokeStatic;
-import static com.facebook.presto.sql.gen.CompilerUtils.defineClass;
-import static com.facebook.presto.sql.gen.CompilerUtils.makeClassName;
-import static com.facebook.presto.sql.gen.SqlTypeByteCodeExpression.constantType;
-import static com.google.common.base.Preconditions.checkNotNull;
+import static com.facebook.presto.bytecode.Access.FINAL;
+import static com.facebook.presto.bytecode.Access.PUBLIC;
+import static com.facebook.presto.bytecode.Access.a;
+import static com.facebook.presto.bytecode.CompilerUtils.defineClass;
+import static com.facebook.presto.bytecode.CompilerUtils.makeClassName;
+import static com.facebook.presto.bytecode.Parameter.arg;
+import static com.facebook.presto.bytecode.ParameterizedType.type;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.constantInt;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.getStatic;
+import static com.facebook.presto.bytecode.expression.BytecodeExpressions.invokeStatic;
+import static com.facebook.presto.sql.gen.SqlTypeBytecodeExpression.constantType;
+import static java.util.Objects.requireNonNull;
 
 public class OrderingCompiler
 {
@@ -74,9 +75,9 @@ public class OrderingCompiler
 
     public PagesIndexOrdering compilePagesIndexOrdering(List<Type> sortTypes, List<Integer> sortChannels, List<SortOrder> sortOrders)
     {
-        checkNotNull(sortTypes, "sortTypes is null");
-        checkNotNull(sortChannels, "sortChannels is null");
-        checkNotNull(sortOrders, "sortOrders is null");
+        requireNonNull(sortTypes, "sortTypes is null");
+        requireNonNull(sortChannels, "sortChannels is null");
+        requireNonNull(sortOrders, "sortOrders is null");
 
         try {
             return pagesIndexOrderings.get(new PagesIndexComparatorCacheKey(sortTypes, sortChannels, sortOrders));
@@ -90,8 +91,8 @@ public class OrderingCompiler
     public PagesIndexOrdering internalCompilePagesIndexOrdering(List<Type> sortTypes, List<Integer> sortChannels, List<SortOrder> sortOrders)
             throws Exception
     {
-        checkNotNull(sortChannels, "sortChannels is null");
-        checkNotNull(sortOrders, "sortOrders is null");
+        requireNonNull(sortChannels, "sortChannels is null");
+        requireNonNull(sortOrders, "sortOrders is null");
 
         PagesIndexComparator comparator;
         try {
@@ -180,25 +181,25 @@ public class OrderingCompiler
             int sortChannel = sortChannels.get(i);
             SortOrder sortOrder = sortOrders.get(i);
 
-            Block block = new Block()
+            BytecodeBlock block = new BytecodeBlock()
                     .setDescription("compare channel " + sortChannel + " " + sortOrder);
 
             Type sortType = sortTypes.get(i);
 
-            ByteCodeExpression leftBlock = pagesIndex
+            BytecodeExpression leftBlock = pagesIndex
                     .invoke("getChannel", ObjectArrayList.class, constantInt(sortChannel))
                     .invoke("get", Object.class, leftBlockIndex)
-                    .cast(com.facebook.presto.spi.block.Block.class);
+                    .cast(Block.class);
 
-            ByteCodeExpression rightBlock = pagesIndex
+            BytecodeExpression rightBlock = pagesIndex
                     .invoke("getChannel", ObjectArrayList.class, constantInt(sortChannel))
                     .invoke("get", Object.class, rightBlockIndex)
-                    .cast(com.facebook.presto.spi.block.Block.class);
+                    .cast(Block.class);
 
             block.append(getStatic(SortOrder.class, sortOrder.name())
                     .invoke("compareBlockValue",
                             int.class,
-                            ImmutableList.of(Type.class, com.facebook.presto.spi.block.Block.class, int.class, com.facebook.presto.spi.block.Block.class, int.class),
+                            ImmutableList.of(Type.class, Block.class, int.class, Block.class, int.class),
                             constantType(callSiteBinder, sortType),
                             leftBlock,
                             leftBlockPosition,
